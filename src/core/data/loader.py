@@ -163,59 +163,6 @@ def carregar_rede_completa(path: str) -> RedeEntrega:
     return rede
 
 
-def carregar_dados_legado(path: str) -> RedeEntrega:
-    """Carrega dados do formato antigo e converte para o novo formato"""
-    with open(path, "r", encoding='utf-8') as f:
-        data = json.load(f)
-    
-    # Converter formato antigo
-    depositos = [Deposito(**d) for d in data.get("depositos", [])]
-    
-    hubs = []
-    hubs_dict = {}
-    for h in data.get("hubs", []):
-        hub = Hub(**h, nome="", endereco="")
-        hubs.append(hub)
-        hubs_dict[hub.id] = hub
-    
-    # No formato antigo, não há clientes - criar zona sem clientes
-    zonas = []
-    for z in data.get("zonas", []):
-        hubs_zona = [hubs_dict[h] for h in z["hubs"] if h in hubs_dict]
-        zona = ZonaEntrega(
-            id=z["id"],
-            nome=z["id"].replace("ZONA_", "").title(),
-            hubs=hubs_zona,
-            clientes=[],  # Vazio no formato antigo
-            demanda_total=0
-        )
-        zonas.append(zona)
-    
-    # Converter rotas
-    rotas = []
-    for r in data.get("rotas", []):
-        rota = Rota(
-            origem=r["origem"],
-            destino=r["destino"],
-            peso=r.get("peso", 1.0),
-            capacidade=r["capacidade"],
-            tipo_rota="legado"
-        )
-        rotas.append(rota)
-    
-    rede = RedeEntrega(
-        depositos=depositos,
-        hubs=hubs,
-        clientes=[],  # Vazio no formato antigo
-        zonas=zonas,
-        veiculos=[],  # Vazio no formato antigo
-        rotas=rotas,
-        pedidos=[]   # Vazio no formato antigo
-    )
-    
-    return rede
-
-
 def validar_rede_completa(rede: RedeEntrega) -> Dict[str, Any]:
     """Validação completa da integridade da rede expandida"""
     problemas = []
@@ -465,29 +412,3 @@ def exportar_para_diversos_formatos(rede: RedeEntrega, prefixo_arquivo: str):
         json.dump(stats, f, indent=2, ensure_ascii=False)
     
     print(f"Rede exportada para múltiplos formatos com prefixo: {prefixo_arquivo}")
-
-
-# Função de conveniência para migração
-def migrar_formato_antigo_para_novo(arquivo_antigo: str, arquivo_novo: str, 
-                                   num_clientes: int = 100):
-    """Migra arquivo do formato antigo para o novo formato completo"""
-    from ..generators.gerador_completo import GeradorMaceioCompleto
-    
-    # Carregar dados antigos
-    rede_antiga = carregar_dados_legado(arquivo_antigo)
-    
-    # Gerar dados completos baseados na estrutura antiga
-    gerador = GeradorMaceioCompleto()
-    rede_nova = gerador.gerar_rede_completa(num_clientes=num_clientes)
-    
-    # Preservar depósitos e hubs originais se compatíveis
-    if len(rede_antiga.depositos) <= len(rede_nova.depositos):
-        for i, dep_antigo in enumerate(rede_antiga.depositos):
-            rede_nova.depositos[i].latitude = dep_antigo.latitude
-            rede_nova.depositos[i].longitude = dep_antigo.longitude
-    
-    # Salvar nova rede
-    gerador.salvar_json(rede_nova, arquivo_novo)
-    
-    print(f"Migração concluída: {arquivo_antigo} → {arquivo_novo}")
-    return rede_nova

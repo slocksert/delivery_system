@@ -16,11 +16,9 @@ from .entities import (
 # Manipulação de dados
 from .data.loader import (
     carregar_rede_completa,
-    carregar_dados_legado,
     validar_rede_completa,
     construir_grafo_networkx_completo,
-    exportar_para_diversos_formatos,
-    migrar_formato_antigo_para_novo
+    exportar_para_diversos_formatos
 )
 
 # Geradores
@@ -43,9 +41,8 @@ __all__ = [
     'FluxoRota', 'CenarioSimulacao', 'ResultadoOtimizacao',
     
     # Funções de dados
-    'carregar_rede_completa', 'carregar_dados_legado', 'validar_rede_completa',
+    'carregar_rede_completa', 'validar_rede_completa',
     'construir_grafo_networkx_completo', 'exportar_para_diversos_formatos',
-    'migrar_formato_antigo_para_novo',
     
     # Geradores
     'GeradorMaceioCompleto', 'gerar_rede_maceio_completa'
