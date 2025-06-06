@@ -6,7 +6,7 @@ Inclui clientes finais e rotas completas para o sistema de delivery
 import json
 import math
 import random
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from itertools import combinations
 from datetime import datetime
 
@@ -24,7 +24,7 @@ class GeradorMaceioCompleto:
         random.seed(seed)
         self.seed = seed
     
-    def gerar_rede_completa(self, num_clientes: int = 100) -> RedeEntrega:
+    def gerar_rede_completa(self, num_clientes: int = 100, num_entregadores: Optional[int] = None) -> RedeEntrega:
         """Gera uma rede completa de entregas para Maceió"""
         print(f"Gerando rede completa para Maceió com {num_clientes} clientes...")
         
@@ -33,7 +33,7 @@ class GeradorMaceioCompleto:
         hubs = self._gerar_hubs()
         clientes = self._gerar_clientes(num_clientes)
         zonas = self._gerar_zonas(hubs, clientes)
-        veiculos = self._gerar_veiculos(hubs)
+        veiculos = self._gerar_veiculos(hubs, num_entregadores)
         
         # 2. Gerar todas as rotas
         rotas = self._gerar_rotas_completas(depositos, hubs, clientes, zonas)
@@ -207,50 +207,99 @@ class GeradorMaceioCompleto:
         
         return zonas
     
-    def _gerar_veiculos(self, hubs: List[Hub]) -> List[Veiculo]:
+    def _gerar_veiculos(self, hubs: List[Hub], num_entregadores: Optional[int] = None) -> List[Veiculo]:
         """Gera frota de veículos distribuída pelos hubs"""
         veiculos = []
         veiculo_id = 1
         
-        # Distribuir veículos por hub baseado na capacidade
-        for hub in hubs:
-            # Número de veículos proporcional à capacidade do hub
-            num_veiculos = max(2, hub.capacidade // 25)
+        if num_entregadores is not None:
+            # Se número específico foi fornecido, distribuir pelos hubs
+            if num_entregadores < len(hubs):
+                # Se temos menos entregadores que hubs, alguns hubs ficarão sem veículos
+                veiculos_por_hub = 0
+                veiculos_extras = num_entregadores
+            else:
+                # Se temos mais entregadores que hubs, distribuir uniformemente
+                veiculos_por_hub = num_entregadores // len(hubs)
+                veiculos_extras = num_entregadores % len(hubs)
             
-            for _ in range(num_veiculos):
-                # Distribuição de tipos de veículo
-                tipo = random.choices(
-                    list(TipoVeiculo),
-                    weights=[50, 30, 15, 5],  # Mais motos, menos caminhões
-                    k=1
-                )[0]
+            for i, hub in enumerate(hubs):
+                # Distribuir veículos extras nos primeiros hubs
+                num_veiculos = veiculos_por_hub + (1 if i < veiculos_extras else 0)
                 
-                # Capacidade baseada no tipo
-                capacidades = {
-                    TipoVeiculo.MOTO: random.randint(3, 8),
-                    TipoVeiculo.CARRO: random.randint(8, 15),
-                    TipoVeiculo.VAN: random.randint(15, 25),
-                    TipoVeiculo.CAMINHAO: random.randint(25, 40)
-                }
+                for _ in range(num_veiculos):
+                    # Distribuição de tipos de veículo
+                    tipo = random.choices(
+                        list(TipoVeiculo),
+                        weights=[50, 30, 15, 5],  # Mais motos, menos caminhões
+                        k=1
+                    )[0]
+                    
+                    # Capacidade baseada no tipo
+                    capacidades = {
+                        TipoVeiculo.MOTO: random.randint(3, 8),
+                        TipoVeiculo.CARRO: random.randint(8, 15),
+                        TipoVeiculo.VAN: random.randint(15, 25),
+                        TipoVeiculo.CAMINHAO: random.randint(25, 40)
+                    }
+                    
+                    velocidades = {
+                        TipoVeiculo.MOTO: random.uniform(25, 35),
+                        TipoVeiculo.CARRO: random.uniform(20, 30),
+                        TipoVeiculo.VAN: random.uniform(18, 25),
+                        TipoVeiculo.CAMINHAO: random.uniform(15, 20)
+                    }
+                    
+                    veiculo = Veiculo(
+                        id=f"VEI_{veiculo_id:03d}",
+                        tipo=tipo,
+                        capacidade=capacidades[tipo],
+                        velocidade_media=velocidades[tipo],
+                        hub_base=hub.id,
+                        condutor=f"Condutor {veiculo_id}"
+                    )
+                    veiculos.append(veiculo)
+                    veiculo_id += 1
+        else:
+            # Comportamento original: distribuir por capacidade do hub
+            for hub in hubs:
+                # Número de veículos proporcional à capacidade do hub
+                num_veiculos = max(2, hub.capacidade // 25)
                 
-                velocidades = {
-                    TipoVeiculo.MOTO: random.uniform(25, 35),
-                    TipoVeiculo.CARRO: random.uniform(20, 30),
-                    TipoVeiculo.VAN: random.uniform(18, 25),
-                    TipoVeiculo.CAMINHAO: random.uniform(15, 20)
-                }
-                
-                veiculo = Veiculo(
-                    id=f"VEI_{veiculo_id:03d}",
-                    tipo=tipo,
-                    capacidade=capacidades[tipo],
-                    velocidade_media=velocidades[tipo],
-                    hub_base=hub.id,
-                    condutor=f"Condutor {veiculo_id}"
-                )
-                
-                veiculos.append(veiculo)
-                veiculo_id += 1
+                for _ in range(num_veiculos):
+                    # Distribuição de tipos de veículo
+                    tipo = random.choices(
+                        list(TipoVeiculo),
+                        weights=[50, 30, 15, 5],  # Mais motos, menos caminhões
+                        k=1
+                    )[0]
+                    
+                    # Capacidade baseada no tipo
+                    capacidades = {
+                        TipoVeiculo.MOTO: random.randint(3, 8),
+                        TipoVeiculo.CARRO: random.randint(8, 15),
+                        TipoVeiculo.VAN: random.randint(15, 25),
+                        TipoVeiculo.CAMINHAO: random.randint(25, 40)
+                    }
+                    
+                    velocidades = {
+                        TipoVeiculo.MOTO: random.uniform(25, 35),
+                        TipoVeiculo.CARRO: random.uniform(20, 30),
+                        TipoVeiculo.VAN: random.uniform(18, 25),
+                        TipoVeiculo.CAMINHAO: random.uniform(15, 20)
+                    }
+                    
+                    veiculo = Veiculo(
+                        id=f"VEI_{veiculo_id:03d}",
+                        tipo=tipo,
+                        capacidade=capacidades[tipo],
+                        velocidade_media=velocidades[tipo],
+                        hub_base=hub.id,
+                        condutor=f"Condutor {veiculo_id}"
+                    )
+                    
+                    veiculos.append(veiculo)
+                    veiculo_id += 1
         
         return veiculos
     
