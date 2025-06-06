@@ -3,6 +3,7 @@ Utilitários para manipulação de dados
 Suporte para todas as entidades do sistema
 """
 
+from copy import deepcopy
 import json
 import networkx as nx
 from typing import Dict, List, Any, Optional
@@ -18,7 +19,7 @@ def carregar_rede_completa(path: str) -> RedeEntrega:
     """Carrega rede completa de arquivo JSON"""
     with open(path, "r", encoding='utf-8') as f:
         data = json.load(f)
-    
+
     # Carregar depósitos
     depositos = []
     for d in data.get("depositos", []):
@@ -31,7 +32,7 @@ def carregar_rede_completa(path: str) -> RedeEntrega:
             endereco=d.get("endereco", "")
         )
         depositos.append(deposito)
-    
+
     # Carregar hubs
     hubs = []
     hubs_dict = {}  # Para referência rápida
@@ -47,13 +48,13 @@ def carregar_rede_completa(path: str) -> RedeEntrega:
         )
         hubs.append(hub)
         hubs_dict[hub.id] = hub
-    
+
     # Carregar clientes
     clientes = []
     clientes_dict = {}  # Para referência rápida
     for c in data.get("clientes", []):
         prioridade = PrioridadeCliente(c.get("prioridade", 2))
-        
+
         cliente = Cliente(
             id=c["id"],
             latitude=c["latitude"],
@@ -66,18 +67,18 @@ def carregar_rede_completa(path: str) -> RedeEntrega:
         )
         clientes.append(cliente)
         clientes_dict[cliente.id] = cliente
-    
+
     # Carregar zonas
     zonas = []
     for z in data.get("zonas", []):
         # Associar hubs da zona
-        hubs_zona = [hubs_dict[hub_id] for hub_id in z.get("hubs", []) 
+        hubs_zona = [hubs_dict[hub_id] for hub_id in z.get("hubs", [])
                     if hub_id in hubs_dict]
-        
+
         # Associar clientes da zona
         clientes_zona = [clientes_dict[cliente_id] for cliente_id in z.get("clientes", [])
                         if cliente_id in clientes_dict]
-        
+
         zona = ZonaEntrega(
             id=z["id"],
             nome=z.get("nome", ""),
@@ -87,12 +88,12 @@ def carregar_rede_completa(path: str) -> RedeEntrega:
             area_cobertura=z.get("area_cobertura", 0.0)
         )
         zonas.append(zona)
-    
+
     # Carregar veículos
     veiculos = []
     for v in data.get("veiculos", []):
         tipo = TipoVeiculo(v.get("tipo", "moto"))
-        
+
         veiculo = Veiculo(
             id=v["id"],
             tipo=tipo,
@@ -103,7 +104,7 @@ def carregar_rede_completa(path: str) -> RedeEntrega:
             condutor=v.get("condutor", "")
         )
         veiculos.append(veiculo)
-    
+
     # Carregar rotas
     rotas = []
     for r in data.get("rotas", []):
@@ -118,22 +119,22 @@ def carregar_rede_completa(path: str) -> RedeEntrega:
             ativa=r.get("ativa", True)
         )
         rotas.append(rota)
-    
+
     # Carregar pedidos (se existirem)
     pedidos = []
     for p in data.get("pedidos", []):
         status = StatusPedido(p.get("status", "pendente"))
         prioridade = PrioridadeCliente(p.get("prioridade", 2))
-        
+
         # Tratar timestamp
         timestamp_criacao = datetime.now()
         if "timestamp_criacao" in p:
             timestamp_criacao = datetime.fromisoformat(p["timestamp_criacao"])
-        
+
         timestamp_entrega = None
         if "timestamp_entrega" in p and p["timestamp_entrega"]:
             timestamp_entrega = datetime.fromisoformat(p["timestamp_entrega"])
-        
+
         pedido = Pedido(
             id=p["id"],
             cliente_id=p["cliente_id"],
@@ -148,7 +149,7 @@ def carregar_rede_completa(path: str) -> RedeEntrega:
             observacoes=p.get("observacoes", "")
         )
         pedidos.append(pedido)
-    
+
     # Criar rede
     rede = RedeEntrega(
         depositos=depositos,
@@ -159,7 +160,7 @@ def carregar_rede_completa(path: str) -> RedeEntrega:
         rotas=rotas,
         pedidos=pedidos
     )
-    
+
     return rede
 
 
@@ -167,40 +168,40 @@ def validar_rede_completa(rede: RedeEntrega) -> Dict[str, Any]:
     """Validação completa da integridade da rede expandida"""
     problemas = []
     warnings = []
-    
+
     # Validações básicas
     if not rede.depositos:
         problemas.append("Rede sem depósitos")
-    
+
     if not rede.hubs:
         problemas.append("Rede sem hubs")
-    
+
     if not rede.rotas:
         problemas.append("Rede sem rotas")
-    
+
     # Validar capacidades
     for hub in rede.hubs:
         if hub.capacidade <= 0:
             problemas.append(f"Hub {hub.id} com capacidade inválida: {hub.capacidade}")
-    
+
     for rota in rede.rotas:
         if rota.capacidade <= 0:
             problemas.append(f"Rota {rota.origem}->{rota.destino} com capacidade inválida")
-    
+
     # Validar conectividade básica
     try:
         vertices = rede.obter_vertices()
         grafo = nx.DiGraph()
         grafo.add_nodes_from(vertices)
-        
+
         for rota in rede.rotas:
             if rota.ativa:
                 grafo.add_edge(rota.origem, rota.destino)
-        
+
         # Verificar conectividade depósitos → hubs
         depositos_ids = [d.id for d in rede.depositos]
         hubs_ids = [h.id for h in rede.hubs if h.operacional]
-        
+
         for dep_id in depositos_ids:
             conectado = False
             for hub_id in hubs_ids:
@@ -209,7 +210,7 @@ def validar_rede_completa(rede: RedeEntrega) -> Dict[str, Any]:
                     break
             if not conectado:
                 problemas.append(f"Depósito {dep_id} não conectado a nenhum hub")
-        
+
         # Verificar conectividade hubs → clientes (se existirem)
         if rede.clientes:
             clientes_conectados = 0
@@ -223,55 +224,55 @@ def validar_rede_completa(rede: RedeEntrega) -> Dict[str, Any]:
                             break
                     if not conectado:
                         warnings.append(f"Cliente {cliente.id} não conectado a nenhum hub")
-            
+
             if clientes_conectados == 0 and len(rede.clientes) > 0:
                 problemas.append("Nenhum cliente conectado aos hubs")
-    
+
     except Exception as e:
         problemas.append(f"Erro na validação de conectividade: {str(e)}")
-    
+
     # Validar consistência de zonas
     for zona in rede.zonas:
         # Verificar se clientes da zona estão na lista principal
         for cliente in zona.clientes:
             if cliente not in rede.clientes:
                 problemas.append(f"Cliente {cliente.id} da zona {zona.id} não está na lista principal")
-        
+
         # Verificar se hubs da zona estão na lista principal
         for hub in zona.hubs:
             if hub not in rede.hubs:
                 problemas.append(f"Hub {hub.id} da zona {zona.id} não está na lista principal")
-    
+
     # Validar veículos
     hub_ids = {h.id for h in rede.hubs}
     for veiculo in rede.veiculos:
         if veiculo.hub_base not in hub_ids:
             problemas.append(f"Veículo {veiculo.id} tem hub_base inválido: {veiculo.hub_base}")
-    
+
     # Validar pedidos
     cliente_ids = {c.id for c in rede.clientes}
     veiculo_ids = {v.id for v in rede.veiculos}
-    
+
     for pedido in rede.pedidos:
         if pedido.cliente_id not in cliente_ids:
             problemas.append(f"Pedido {pedido.id} tem cliente_id inválido: {pedido.cliente_id}")
-        
+
         if pedido.veiculo_id and pedido.veiculo_id not in veiculo_ids:
             warnings.append(f"Pedido {pedido.id} tem veiculo_id inválido: {pedido.veiculo_id}")
-        
+
         if pedido.origem_hub and pedido.origem_hub not in hub_ids:
             warnings.append(f"Pedido {pedido.id} tem origem_hub inválido: {pedido.origem_hub}")
-    
+
     # Análise de capacidade vs demanda
     if rede.clientes:
         demanda_total = rede.obter_demanda_total()
         capacidade_total = rede.obter_capacidade_total()
-        
+
         if demanda_total > capacidade_total:
             warnings.append(f"Demanda total ({demanda_total}) excede capacidade total ({capacidade_total})")
         elif capacidade_total > demanda_total * 2:
             warnings.append(f"Capacidade excessiva: {capacidade_total} vs demanda {demanda_total}")
-    
+
     return {
         'rede_valida': len(problemas) == 0,
         'problemas': problemas,
@@ -285,16 +286,16 @@ def validar_rede_completa(rede: RedeEntrega) -> Dict[str, Any]:
 def construir_grafo_networkx_completo(rede: RedeEntrega) -> nx.DiGraph:
     """Constrói um grafo NetworkX completo a partir da rede"""
     grafo = nx.DiGraph()
-    
+
     # Adicionar todos os vértices com atributos
     for deposito in rede.depositos:
-        grafo.add_node(deposito.id, 
+        grafo.add_node(deposito.id,
                       tipo='deposito',
                       latitude=deposito.latitude,
                       longitude=deposito.longitude,
                       capacidade=deposito.capacidade_maxima,
                       nome=deposito.nome)
-    
+
     for hub in rede.hubs:
         grafo.add_node(hub.id,
                       tipo='hub',
@@ -303,7 +304,7 @@ def construir_grafo_networkx_completo(rede: RedeEntrega) -> nx.DiGraph:
                       capacidade=hub.capacidade,
                       nome=hub.nome,
                       operacional=hub.operacional)
-    
+
     for cliente in rede.clientes:
         grafo.add_node(cliente.id,
                       tipo='cliente',
@@ -313,7 +314,7 @@ def construir_grafo_networkx_completo(rede: RedeEntrega) -> nx.DiGraph:
                       prioridade=cliente.prioridade.value,
                       zona_id=cliente.zona_id,
                       ativo=cliente.ativo)
-    
+
     for zona in rede.zonas:
         grafo.add_node(zona.id,
                       tipo='zona',
@@ -321,7 +322,7 @@ def construir_grafo_networkx_completo(rede: RedeEntrega) -> nx.DiGraph:
                       demanda_total=zona.demanda_total,
                       num_clientes=len(zona.clientes),
                       num_hubs=len(zona.hubs))
-    
+
     # Adicionar arestas com atributos
     for rota in rede.rotas:
         if rota.ativa:
@@ -331,14 +332,39 @@ def construir_grafo_networkx_completo(rede: RedeEntrega) -> nx.DiGraph:
                           tipo_rota=rota.tipo_rota,
                           tempo_medio=rota.tempo_medio,
                           custo=rota.custo)
-    
+
     return grafo
 
+
+def cria_grafo_residual(grafo: nx.DiGraph) -> nx.DiGraph:
+    """
+    Adiciona super_source e super_sink ao grafo existente usando uma copia para nao mutar o grafo original.
+    - Conecta super_source a todos os depósitos.
+    - Conecta todos os clientes ativos ao super_sink.
+    - Retorna Grafo Residual
+    """
+    copy_grafo = deepcopy(grafo)
+
+    super_source = "super_source"
+    super_sink = "super_sink"
+
+    copy_grafo.add_node(super_source, tipo="supersource")
+    copy_grafo.add_node(super_sink, tipo="supersink")
+
+    for node, data in copy_grafo.nodes(data=True):
+        if data.get("tipo") == "deposito":
+            capacidade = data.get("capacidade", 0)
+            copy_grafo.add_edge(super_source, node, capacidade=capacidade)
+        if data.get("tipo") == "cliente" and data.get("ativo", False):
+            demanda = data.get("demanda", 0)
+            copy_grafo.add_edge(node, super_sink, capacidade=demanda)
+
+    return nx.flow.edmonds_karp(G=copy_grafo, capacity="capacidade", s=super_source, t=super_sink)
 
 def exportar_para_diversos_formatos(rede: RedeEntrega, prefixo_arquivo: str):
     """Exporta a rede para diversos formatos úteis"""
     import pandas as pd
-    
+
     # 1. CSV das entidades
     # Depósitos
     df_depositos = pd.DataFrame([
@@ -353,7 +379,7 @@ def exportar_para_diversos_formatos(rede: RedeEntrega, prefixo_arquivo: str):
         for d in rede.depositos
     ])
     df_depositos.to_csv(f"{prefixo_arquivo}_depositos.csv", index=False)
-    
+
     # Hubs
     df_hubs = pd.DataFrame([
         {
@@ -368,7 +394,7 @@ def exportar_para_diversos_formatos(rede: RedeEntrega, prefixo_arquivo: str):
         for h in rede.hubs
     ])
     df_hubs.to_csv(f"{prefixo_arquivo}_hubs.csv", index=False)
-    
+
     # Clientes
     if rede.clientes:
         df_clientes = pd.DataFrame([
@@ -385,7 +411,7 @@ def exportar_para_diversos_formatos(rede: RedeEntrega, prefixo_arquivo: str):
             for c in rede.clientes
         ])
         df_clientes.to_csv(f"{prefixo_arquivo}_clientes.csv", index=False)
-    
+
     # Rotas
     df_rotas = pd.DataFrame([
         {
@@ -401,14 +427,17 @@ def exportar_para_diversos_formatos(rede: RedeEntrega, prefixo_arquivo: str):
         for r in rede.rotas
     ])
     df_rotas.to_csv(f"{prefixo_arquivo}_rotas.csv", index=False)
-    
+
     # 2. Grafo para análise
     grafo = construir_grafo_networkx_completo(rede)
     nx.write_gexf(grafo, f"{prefixo_arquivo}_grafo.gexf")
-    
+
+    grafo_residual = cria_grafo_residual(grafo)
+    nx.write_gexf(grafo_residual, f"{prefixo_arquivo}_grafo_residual.gexf")
+
     # 3. Resumo estatístico
     stats = rede.obter_estatisticas()
     with open(f"{prefixo_arquivo}_estatisticas.json", 'w', encoding='utf-8') as f:
         json.dump(stats, f, indent=2, ensure_ascii=False)
-    
+
     print(f"Rede exportada para múltiplos formatos com prefixo: {prefixo_arquivo}")
