@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-Backend API behavior tests following Google's testing best practices.
+Testes de comportamento da API Backend seguindo as melhores práticas de teste do Google.
 
-This file focuses on API functionality excluding authentication (which is tested in test_auth_behaviors.py).
-Tests are organized by behavior rather than endpoint and follow DAMP over DRY principles.
+Este arquivo foca na funcionalidade da API excluindo autenticação (que é testada em test_auth_behaviors.py).
+Os testes são organizados por comportamento em vez de endpoint e seguem princípios DAMP em vez de DRY.
 
-Behaviors tested:
-- Network Management (CRUD operations)
-- Data Integration (import/export)
-- API Health and Status
-- Permission-based Access Control
-- Error Handling and Validation
-- Complete Workflow Integration
-- Database Operations
+Comportamentos testados:
+- Gerenciamento de Rede (operações CRUD)
+- Integração de Dados (importação/exportação)
+- Saúde e Status da API
+- Controle de Acesso Baseado em Permissões
+- Tratamento de Erros e Validação
+- Integração de Fluxo de Trabalho Completo
+- Operações de Banco de Dados
 """
 
 import pytest
@@ -35,17 +35,17 @@ from backend.database.sqlite import SQLiteDB
 
 @pytest.fixture(scope="function")
 def isolated_client_with_auth():
-    """Creates isolated test client with authentication setup."""
-    # Create temporary database
+    """Cria cliente de teste isolado com configuração de autenticação."""
+    # Cria banco de dados temporário
     temp_dir = tempfile.mkdtemp(prefix="test_backend_")
     test_db_path = os.path.join(temp_dir, "test_backend.db")
     
-    # Setup database
+    # Configura banco de dados
     test_db = SQLiteDB(db_path=test_db_path)
     override_database_for_testing(test_db)
     app.dependency_overrides[get_database] = lambda: test_db
     
-    # Setup service
+    # Configura serviço
     test_service = RedeService(db=test_db)
     app.dependency_overrides[get_rede_service] = lambda: test_service
     
@@ -53,7 +53,7 @@ def isolated_client_with_auth():
     
     yield client
     
-    # Cleanup
+    # Limpeza
     app.dependency_overrides.clear()
     reset_database()
     if os.path.exists(test_db_path):
@@ -66,43 +66,43 @@ def isolated_client_with_auth():
 
 @pytest.fixture
 def admin_auth_headers(isolated_client_with_auth):
-    """Gets admin authentication headers."""
+    """Obtém os cabeçalhos de autenticação do admin."""
     response = isolated_client_with_auth.post(
         "/api/v1/auth/login-json",
         json={"username": "admin", "password": "secret"}
     )
-    assert response.status_code == 200, "Admin login should succeed for backend tests"
+    assert response.status_code == 200, "Login do admin deve ter sucesso para testes de backend"
     token = response.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture
 def operator_auth_headers(isolated_client_with_auth):
-    """Gets operator authentication headers."""
+    """Obtém os cabeçalhos de autenticação do operador."""
     response = isolated_client_with_auth.post(
         "/api/v1/auth/login-json",
         json={"username": "operator", "password": "secret"}
     )
-    assert response.status_code == 200, "Operator login should succeed for backend tests"
+    assert response.status_code == 200, "Login do operador deve ter sucesso para testes de backend"
     token = response.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture
 def viewer_auth_headers(isolated_client_with_auth):
-    """Gets viewer authentication headers."""
+    """Obtém os cabeçalhos de autenticação do visualizador."""
     response = isolated_client_with_auth.post(
         "/api/v1/auth/login-json",
         json={"username": "viewer", "password": "secret"}
     )
-    assert response.status_code == 200, "Viewer login should succeed for backend tests"
+    assert response.status_code == 200, "Login do visualizador deve ter sucesso para testes de backend"
     token = response.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture
 def sample_network_data():
-    """Provides sample network data for testing."""
+    """Fornece dados de rede de exemplo para testes."""
     return {
         "nome": "Test Network Sample",
         "descricao": "Network created for behavior testing",
@@ -151,104 +151,104 @@ def sample_network_data():
 
 
 class TestAPIHealthAndStatus:
-    """Tests API health, status, and basic functionality."""
+    """Testa saúde, status e funcionalidade básica da API."""
     
     def test_api_root_endpoint_provides_version_information(self, isolated_client_with_auth):
-        """API root should provide service information and version."""
+        """Endpoint raiz da API deve fornecer informações de versão do serviço."""
         response = isolated_client_with_auth.get("/")
         
-        assert response.status_code == 200, "Root endpoint should be accessible"
+        assert response.status_code == 200, "Endpoint raiz deve ser acessível"
         data = response.json()
-        assert "message" in data, "Should include service message"
-        assert "version" in data, "Should include version information"
-        assert data["message"] == "API de Rede de Entrega", "Should have correct service name"
+        assert "message" in data, "Deve incluir mensagem do serviço"
+        assert "version" in data, "Deve incluir informações de versão"
+        assert data["message"] == "API de Rede de Entrega", "Deve ter o nome correto do serviço"
     
     def test_health_check_reports_service_status(self, isolated_client_with_auth):
-        """Health endpoint should report operational status of services."""
+        """Endpoint de saúde deve reportar status operacional dos serviços."""
         response = isolated_client_with_auth.get("/health")
         
-        assert response.status_code == 200, "Health check should be accessible"
+        assert response.status_code == 200, "Verificação de saúde deve ser acessível"
         data = response.json()
-        assert data["status"] == "healthy", "Service should report as healthy"
-        assert "services" in data, "Should report status of individual services"
-        assert data["services"]["api"] == "operational", "API service should be operational"
+        assert data["status"] == "healthy", "Serviço deve reportar como saudável"
+        assert "services" in data, "Deve reportar status de serviços individuais"
+        assert data["services"]["api"] == "operational", "Serviço API deve estar operacional"
 
 
 class TestNetworkManagement:
-    """Tests behaviors related to network creation, modification, and management."""
+    """Testa comportamentos relacionados à criação, modificação e gerenciamento de rede."""
     
     def test_system_starts_with_empty_network_list(self, isolated_client_with_auth, admin_auth_headers):
-        """New system should start with no networks."""
+        """Sistema novo deve iniciar sem redes."""
         response = isolated_client_with_auth.get("/api/v1/rede/listar", headers=admin_auth_headers)
         
-        assert response.status_code == 200, "Network listing should be accessible"
+        assert response.status_code == 200, "Listagem de redes deve ser acessível"
         networks = response.json()
-        assert isinstance(networks, list), "Should return list of networks"
-        assert len(networks) == 0, "New system should have no networks"
+        assert isinstance(networks, list), "Deve retornar lista de redes"
+        assert len(networks) == 0, "Sistema novo deve ter zero redes"
     
     def test_users_can_create_custom_networks_with_valid_data(self, isolated_client_with_auth, admin_auth_headers, sample_network_data):
-        """Users should be able to create custom networks with valid structure."""
+        """Usuários devem poder criar redes personalizadas com estrutura válida."""
         response = isolated_client_with_auth.post(
             "/api/v1/rede/criar",
             json=sample_network_data,
             headers=admin_auth_headers
         )
         
-        assert response.status_code == 201, "Valid network data should be accepted"
+        assert response.status_code == 201, "Dados válidos de rede devem ser aceitos"
         data = response.json()
-        assert data["status"] == "success", "Creation should report success"
-        assert "rede_id" in data["data"], "Should return network ID"
-        assert sample_network_data["nome"] in data["message"], "Success message should include network name"
+        assert data["status"] == "success", "Criação deve reportar sucesso"
+        assert "rede_id" in data["data"], "Deve retornar ID da rede"
+        assert sample_network_data["nome"] in data["message"], "Mensagem de sucesso deve incluir nome da rede"
     
     def test_system_generates_complete_maceio_networks_on_demand(self, isolated_client_with_auth, admin_auth_headers):
-        """System should generate complete Maceió networks with specified client count."""
+        """Sistema deve gerar redes completas de Maceió com quantidade especificada de clientes."""
         client_count = 50
         response = isolated_client_with_auth.post(
             f"/api/v1/rede/criar-maceio-completo?num_clientes={client_count}",
             headers=admin_auth_headers
         )
         
-        assert response.status_code == 201, "Maceió network generation should succeed"
+        assert response.status_code == 201, "Geração de rede de Maceió deve ter sucesso"
         data = response.json()
-        assert data["status"] == "success", "Generation should report success"
-        assert "rede_id" in data["data"], "Should return network ID"
-        assert f"{client_count} clientes" in data["message"], "Should confirm client count in message"
+        assert data["status"] == "success", "Geração deve reportar sucesso"
+        assert "rede_id" in data["data"], "Deve retornar ID da rede"
+        assert f"{client_count} clientes" in data["message"], "Deve confirmar quantidade de clientes na mensagem"
     
     def test_maceio_networks_can_be_created_with_custom_names(self, isolated_client_with_auth, admin_auth_headers):
-        """Users should be able to specify custom names for generated Maceió networks."""
-        custom_name = "My Custom Maceió Network"
+        """Usuários devem poder especificar nomes personalizados para redes geradas de Maceió."""
+        custom_name = "Minha Rede Personalizada de Maceió"
         response = isolated_client_with_auth.post(
             f"/api/v1/rede/criar-maceio-completo?num_clientes=25&nome_rede={custom_name}",
             headers=admin_auth_headers
         )
         
-        assert response.status_code == 201, "Custom named network should be created"
+        assert response.status_code == 201, "Rede com nome personalizado deve ser criada"
         data = response.json()
-        assert data["status"] == "success", "Creation should report success"
-        assert "rede_id" in data["data"], "Should return network ID"
+        assert data["status"] == "success", "Criação deve reportar sucesso"
+        assert "rede_id" in data["data"], "Deve retornar ID da rede"
     
     def test_created_networks_appear_in_system_listing(self, isolated_client_with_auth, admin_auth_headers, sample_network_data):
-        """Networks should appear in system listing after creation."""
-        # Create network
+        """Redes devem aparecer na listagem do sistema após criação."""
+        # Cria rede
         create_response = isolated_client_with_auth.post(
             "/api/v1/rede/criar",
             json=sample_network_data,
             headers=admin_auth_headers
         )
-        assert create_response.status_code == 201, "Network creation should succeed"
+        assert create_response.status_code == 201, "Criação de rede deve ter sucesso"
         
-        # Check listing
+        # Verifica listagem
         list_response = isolated_client_with_auth.get("/api/v1/rede/listar", headers=admin_auth_headers)
-        assert list_response.status_code == 200, "Network listing should be accessible"
+        assert list_response.status_code == 200, "Listagem de redes deve ser acessível"
         
         networks = list_response.json()
-        assert len(networks) > 0, "Should have at least one network"
+        assert len(networks) > 0, "Deve ter pelo menos uma rede"
         network_names = [net["nome"] for net in networks]
-        assert sample_network_data["nome"] in network_names, "Created network should appear in listing"
+        assert sample_network_data["nome"] in network_names, "Rede criada deve aparecer na listagem"
     
     def test_network_information_can_be_retrieved_after_creation(self, isolated_client_with_auth, admin_auth_headers, sample_network_data):
-        """Users should be able to retrieve detailed information about created networks."""
-        # Create network
+        """Usuários devem conseguir recuperar informações detalhadas sobre redes criadas."""
+        # Cria rede
         create_response = isolated_client_with_auth.post(
             "/api/v1/rede/criar",
             json=sample_network_data,
@@ -256,20 +256,20 @@ class TestNetworkManagement:
         )
         network_id = create_response.json()["data"]["rede_id"]
         
-        # Get network info
+        # Obtém informações da rede
         info_response = isolated_client_with_auth.get(f"/api/v1/rede/{network_id}/info", headers=admin_auth_headers)
         
-        assert info_response.status_code == 200, "Network info should be retrievable"
+        assert info_response.status_code == 200, "Informações da rede devem ser recuperáveis"
         info = info_response.json()
-        assert info["nome"] == sample_network_data["nome"], "Should return correct network name"
-        assert info["total_nodes"] == 3, "Should report correct node count"
-        assert info["total_edges"] == 2, "Should report correct edge count"
-        assert "nodes_tipo" in info, "Should include node type distribution"
-        assert "capacidade_total" in info, "Should include capacity information"
+        assert info["nome"] == sample_network_data["nome"], "Deve retornar nome correto da rede"
+        assert info["total_nodes"] == 3, "Deve reportar contagem correta de nós"
+        assert info["total_edges"] == 2, "Deve reportar contagem correta de arestas"
+        assert "nodes_tipo" in info, "Deve incluir distribuição de tipos de nós"
+        assert "capacidade_total" in info, "Deve incluir informações de capacidade"
     
     def test_networks_can_be_validated_for_consistency(self, isolated_client_with_auth, admin_auth_headers, sample_network_data):
-        """System should validate network structure and report consistency status."""
-        # Create network
+        """Sistema deve validar estrutura da rede e reportar status de consistência."""
+        # Cria rede
         create_response = isolated_client_with_auth.post(
             "/api/v1/rede/criar",
             json=sample_network_data,
@@ -277,17 +277,17 @@ class TestNetworkManagement:
         )
         network_id = create_response.json()["data"]["rede_id"]
         
-        # Validate network
+        # Valida rede
         validate_response = isolated_client_with_auth.get(f"/api/v1/rede/{network_id}/validar", headers=admin_auth_headers)
         
-        assert validate_response.status_code == 200, "Network validation should be accessible"
+        assert validate_response.status_code == 200, "Validação de rede deve ser acessível"
         validation = validate_response.json()
-        assert validation["status"] in ["valid", "invalid"], "Should report validation status"
-        assert "data" in validation, "Should include validation details"
+        assert validation["status"] in ["valid", "invalid"], "Deve reportar status de validação"
+        assert "data" in validation, "Deve incluir detalhes de validação"
     
     def test_flow_calculations_can_be_prepared_for_networks(self, isolated_client_with_auth, admin_auth_headers, sample_network_data):
-        """System should prepare flow calculations between network nodes."""
-        # Create network
+        """Sistema deve preparar cálculos de fluxo entre nós da rede."""
+        # Cria rede
         create_response = isolated_client_with_auth.post(
             "/api/v1/rede/criar",
             json=sample_network_data,
@@ -295,7 +295,7 @@ class TestNetworkManagement:
         )
         network_id = create_response.json()["data"]["rede_id"]
         
-        # Prepare flow calculation
+        # Prepara cálculo de fluxo
         flow_data = {"origem": "depot_test", "destino": "zone_test"}
         flow_response = isolated_client_with_auth.post(
             f"/api/v1/rede/{network_id}/fluxo/preparar",
@@ -303,13 +303,13 @@ class TestNetworkManagement:
             headers=admin_auth_headers
         )
         
-        assert flow_response.status_code == 200, "Flow preparation should succeed"
+        assert flow_response.status_code == 200, "Preparação de fluxo deve ter sucesso"
         flow_result = flow_response.json()
-        assert flow_result["status"] == "prepared", "Flow should be prepared successfully"
+        assert flow_result["status"] == "prepared", "Fluxo deve ser preparado com sucesso"
     
     def test_network_nodes_can_be_listed_with_type_filtering(self, isolated_client_with_auth, admin_auth_headers, sample_network_data):
-        """Users should be able to list network nodes with optional type filtering."""
-        # Create network
+        """Usuários devem conseguir listar nós da rede com filtragem opcional por tipo."""
+        # Cria rede
         create_response = isolated_client_with_auth.post(
             "/api/v1/rede/criar",
             json=sample_network_data,
@@ -317,21 +317,21 @@ class TestNetworkManagement:
         )
         network_id = create_response.json()["data"]["rede_id"]
         
-        # List all nodes
+        # Lista todos os nós
         nodes_response = isolated_client_with_auth.get(
             f"/api/v1/rede/{network_id}/nos",
             headers=admin_auth_headers,
             params={"tipo": ""}
         )
         
-        assert nodes_response.status_code == 200, "Node listing should be accessible"
+        assert nodes_response.status_code == 200, "Listagem de nós deve ser acessível"
         nodes = nodes_response.json()
-        assert isinstance(nodes, list), "Should return list of nodes"
-        assert len(nodes) == 3, "Should return all nodes"
+        assert isinstance(nodes, list), "Deve retornar lista de nós"
+        assert len(nodes) == 3, "Deve retornar todos os nós"
     
     def test_network_statistics_provide_comprehensive_metrics(self, isolated_client_with_auth, admin_auth_headers, sample_network_data):
-        """System should provide comprehensive statistics about network structure and capacity."""
-        # Create network
+        """Sistema deve fornecer estatísticas abrangentes sobre estrutura e capacidade da rede."""
+        # Cria rede
         create_response = isolated_client_with_auth.post(
             "/api/v1/rede/criar",
             json=sample_network_data,
@@ -339,50 +339,50 @@ class TestNetworkManagement:
         )
         network_id = create_response.json()["data"]["rede_id"]
         
-        # Get statistics
+        # Obtém estatísticas
         stats_response = isolated_client_with_auth.get(f"/api/v1/rede/{network_id}/estatisticas", headers=admin_auth_headers)
         
-        assert stats_response.status_code == 200, "Network statistics should be accessible"
+        assert stats_response.status_code == 200, "Estatísticas de rede devem ser acessíveis"
         stats = stats_response.json()
-        assert stats["status"] == "success", "Statistics generation should succeed"
-        assert "data" in stats, "Should include statistical data"
-        assert "resumo" in stats["data"], "Should include summary statistics"
-        assert "distribuicao" in stats["data"], "Should include distribution data"
-        assert "metricas" in stats["data"], "Should include detailed metrics"
+        assert stats["status"] == "success", "Geração de estatísticas deve ter sucesso"
+        assert "data" in stats, "Deve incluir dados estatísticos"
+        assert "resumo" in stats["data"], "Deve incluir estatísticas resumidas"
+        assert "distribuicao" in stats["data"], "Deve incluir dados de distribuição"
+        assert "metricas" in stats["data"], "Deve incluir métricas detalhadas"
 
 
 class TestDataIntegration:
-    """Tests behaviors related to data import/export and integration functionality."""
+    """Testa comportamentos relacionados à importação/exportação de dados e funcionalidade de integração."""
     
     def test_integration_service_reports_operational_status(self, isolated_client_with_auth, admin_auth_headers):
-        """Integration service should report its operational status."""
+        """Serviço de integração deve reportar seu status operacional."""
         response = isolated_client_with_auth.get("/api/v1/integracao/status", headers=admin_auth_headers)
         
-        assert response.status_code == 200, "Integration status should be accessible"
+        assert response.status_code == 200, "Status de integração deve ser acessível"
         data = response.json()
-        assert data["status"] == "operational", "Integration service should be operational"
+        assert data["status"] == "operational", "Serviço de integração deve estar operacional"
     
     def test_json_data_can_be_imported_directly(self, isolated_client_with_auth, admin_auth_headers, sample_network_data):
-        """System should accept and import JSON network data directly."""
+        """Sistema deve aceitar e importar dados JSON de rede diretamente."""
         response = isolated_client_with_auth.post(
             "/api/v1/integracao/importar/json-data",
             json=sample_network_data,
             headers=admin_auth_headers
         )
         
-        assert response.status_code == 201, "JSON data import should succeed"
+        assert response.status_code == 201, "Importação de dados JSON deve ter sucesso"
         data = response.json()
-        assert data["status"] == "success", "Import should report success"
-        assert "rede_id" in data["data"], "Should return network ID"
+        assert data["status"] == "success", "Importação deve reportar sucesso"
+        assert "rede_id" in data["data"], "Deve retornar ID da rede"
     
     def test_json_files_can_be_uploaded_and_imported(self, isolated_client_with_auth, admin_auth_headers, sample_network_data, tmp_path):
-        """Users should be able to upload and import JSON files."""
-        # Create temporary JSON file
+        """Usuários devem conseguir fazer upload e importar arquivos JSON."""
+        # Cria arquivo JSON temporário
         json_file = tmp_path / "test_network.json"
         with open(json_file, "w") as f:
             json.dump(sample_network_data, f)
         
-        # Upload and import
+        # Faz upload e importa
         with open(json_file, "rb") as f:
             response = isolated_client_with_auth.post(
                 "/api/v1/integracao/importar/json",
@@ -390,23 +390,23 @@ class TestDataIntegration:
                 headers=admin_auth_headers
             )
         
-        assert response.status_code == 201, "JSON file import should succeed"
+        assert response.status_code == 201, "Importação de arquivo JSON deve ter sucesso"
         data = response.json()
-        assert data["status"] == "success", "File import should report success"
-        assert "rede_id" in data["data"], "Should return network ID"
+        assert data["status"] == "success", "Importação de arquivo deve reportar sucesso"
+        assert "rede_id" in data["data"], "Deve retornar ID da rede"
     
     def test_csv_node_data_can_be_imported(self, isolated_client_with_auth, admin_auth_headers, tmp_path):
-        """System should accept and import CSV node data."""
-        # Create CSV file with node data
+        """Sistema deve aceitar e importar dados de nós em formato CSV."""
+        # Cria arquivo CSV com dados de nós
         csv_content = "id,nome,tipo,latitude,longitude\n"
-        csv_content += "depot1,Central Depot,deposito,-23.5505,-46.6333\n"
-        csv_content += "hub1,Logistics Hub,hub,-23.5305,-46.6233\n"
+        csv_content += "depot1,Depósito Central,deposito,-23.5505,-46.6333\n"
+        csv_content += "hub1,Hub Logístico,hub,-23.5305,-46.6233\n"
         
         csv_file = tmp_path / "nodes.csv"
         with open(csv_file, "w") as f:
             f.write(csv_content)
         
-        # Import CSV
+        # Importa CSV
         with open(csv_file, "r", encoding="utf-8") as f:
             response = isolated_client_with_auth.post(
                 "/api/v1/integracao/importar/csv-nodes",
@@ -414,89 +414,89 @@ class TestDataIntegration:
                 headers=admin_auth_headers
             )
         
-        assert response.status_code == 200, "CSV import should succeed"
+        assert response.status_code == 200, "Importação CSV deve ter sucesso"
         data = response.json()
-        assert data["status"] == "success", "CSV import should report success"
-        assert "total_nodes" in data["data"], "Should report imported node count"
-        assert data["data"]["total_nodes"] == 2, "Should import correct number of nodes"
+        assert data["status"] == "success", "Importação CSV deve reportar sucesso"
+        assert "total_nodes" in data["data"], "Deve reportar contagem de nós importados"
+        assert data["data"]["total_nodes"] == 2, "Deve importar número correto de nós"
         
-        # Verify type distribution
-        assert "tipos_importados" in data["data"], "Should report type distribution"
-        assert data["data"]["tipos_importados"]["deposito"] == 1, "Should count depot nodes"
-        assert data["data"]["tipos_importados"]["hub"] == 1, "Should count hub nodes"
+        # Verifica distribuição de tipos
+        assert "tipos_importados" in data["data"], "Deve reportar distribuição de tipos"
+        assert data["data"]["tipos_importados"]["deposito"] == 1, "Deve contar nós de depósito"
+        assert data["data"]["tipos_importados"]["hub"] == 1, "Deve contar nós de hub"
     
     def test_json_format_examples_are_provided(self, isolated_client_with_auth, admin_auth_headers):
-        """System should provide JSON format examples for users."""
+        """Sistema deve fornecer exemplos de formato JSON para usuários."""
         response = isolated_client_with_auth.get("/api/v1/integracao/exemplo/json", headers=admin_auth_headers)
         
-        assert response.status_code == 200, "JSON example should be accessible"
+        assert response.status_code == 200, "Exemplo JSON deve ser acessível"
         data = response.json()
-        assert "exemplo" in data, "Should provide example data"
-        assert "nome" in data["exemplo"], "Example should include network name"
-        assert "nodes" in data["exemplo"], "Example should include nodes"
-        assert "edges" in data["exemplo"], "Example should include edges"
+        assert "exemplo" in data, "Deve fornecer dados de exemplo"
+        assert "nome" in data["exemplo"], "Exemplo deve incluir nome da rede"
+        assert "nodes" in data["exemplo"], "Exemplo deve incluir nós"
+        assert "edges" in data["exemplo"], "Exemplo deve incluir arestas"
     
     def test_csv_format_examples_are_provided(self, isolated_client_with_auth, admin_auth_headers):
-        """System should provide CSV format examples and instructions."""
+        """Sistema deve fornecer exemplos de formato CSV e instruções."""
         response = isolated_client_with_auth.get("/api/v1/integracao/exemplo/csv", headers=admin_auth_headers)
         
-        assert response.status_code == 200, "CSV example should be accessible"
+        assert response.status_code == 200, "Exemplo CSV deve ser acessível"
         data = response.json()
-        assert "exemplo_csv" in data, "Should provide CSV example"
-        assert "instrucoes" in data, "Should provide instructions"
+        assert "exemplo_csv" in data, "Deve fornecer exemplo CSV"
+        assert "instrucoes" in data, "Deve fornecer instruções"
 
 
 class TestPermissionBasedAccess:
-    """Tests behaviors related to permission-based access control for different user roles."""
+    """Testa comportamentos relacionados ao controle de acesso baseado em permissões para diferentes funções de usuário."""
     
     def test_viewers_can_read_network_data_but_cannot_modify(self, isolated_client_with_auth, admin_auth_headers, viewer_auth_headers, sample_network_data):
-        """Viewers should have read access but no modification permissions."""
-        # Admin creates network
+        """Visualizadores devem ter acesso de leitura mas nenhuma permissão de modificação."""
+        # Admin cria rede
         create_response = isolated_client_with_auth.post(
             "/api/v1/rede/criar",
             json=sample_network_data,
             headers=admin_auth_headers
         )
-        assert create_response.status_code == 201, "Admin should be able to create networks"
+        assert create_response.status_code == 201, "Admin deve conseguir criar redes"
         
-        # Viewer can read
+        # Visualizador pode ler
         list_response = isolated_client_with_auth.get("/api/v1/rede/listar", headers=viewer_auth_headers)
-        assert list_response.status_code == 200, "Viewer should be able to read network list"
+        assert list_response.status_code == 200, "Visualizador deve conseguir ler lista de redes"
         
-        # Viewer cannot create
+        # Visualizador não pode criar
         create_attempt = isolated_client_with_auth.post(
             "/api/v1/rede/criar",
-            json={"nome": "Unauthorized", "nodes": [], "edges": []},
+            json={"nome": "Não Autorizada", "nodes": [], "edges": []},
             headers=viewer_auth_headers
         )
-        assert create_attempt.status_code == 403, "Viewer should be denied create permission"
+        assert create_attempt.status_code == 403, "Visualizador deve ter criação negada"
         assert "Permissão" in create_attempt.json()["detail"] or "write" in create_attempt.json()["detail"]
     
     def test_operators_can_create_and_modify_networks(self, isolated_client_with_auth, operator_auth_headers, sample_network_data):
-        """Operators should have create and modify permissions for networks."""
+        """Operadores devem ter permissões de criação e modificação para redes."""
         response = isolated_client_with_auth.post(
             "/api/v1/rede/criar",
             json=sample_network_data,
             headers=operator_auth_headers
         )
         
-        assert response.status_code == 201, "Operator should be able to create networks"
+        assert response.status_code == 201, "Operador deve conseguir criar redes"
         data = response.json()
-        assert data["status"] == "success", "Network creation should succeed"
+        assert data["status"] == "success", "Criação de rede deve ter sucesso"
     
     def test_all_authenticated_users_can_read_network_data(self, isolated_client_with_auth, admin_auth_headers, sample_network_data):
-        """All authenticated users should have read access to network data."""
-        # Create network as admin
+        """Todos os usuários autenticados devem ter acesso de leitura aos dados de rede."""
+        # Cria rede como admin
         create_response = isolated_client_with_auth.post(
             "/api/v1/rede/criar",
             json=sample_network_data,
             headers=admin_auth_headers
         )
-        assert create_response.status_code == 201, "Network creation should succeed"
+        assert create_response.status_code == 201, "Criação de rede deve ter sucesso"
         
-        # Test read access for all user types
+        # Testa acesso de leitura para todos os tipos de usuário
         for username in ["admin", "operator", "viewer"]:
-            # Get auth token
+            # Obtém token de autenticação
             login_response = isolated_client_with_auth.post(
                 "/api/v1/auth/login-json",
                 json={"username": username, "password": "secret"}
@@ -504,33 +504,33 @@ class TestPermissionBasedAccess:
             token = login_response.json()["access_token"]
             headers = {"Authorization": f"Bearer {token}"}
             
-            # Test read access
+            # Testa acesso de leitura
             read_response = isolated_client_with_auth.get("/api/v1/rede/listar", headers=headers)
-            assert read_response.status_code == 200, f"{username} should have read access"
+            assert read_response.status_code == 200, f"{username} deve ter acesso de leitura"
 
 
 class TestErrorHandlingAndValidation:
-    """Tests system behavior when handling errors and invalid input."""
+    """Testa comportamentos relacionados ao tratamento de erros e validação de entrada."""
     
     def test_system_handles_requests_for_nonexistent_networks(self, isolated_client_with_auth, admin_auth_headers):
-        """System should gracefully handle requests for networks that don't exist."""
+        """Sistema deve lidar graciosamente com requisições para redes que não existem."""
         response = isolated_client_with_auth.get("/api/v1/rede/nonexistent_id/info", headers=admin_auth_headers)
         
-        assert response.status_code == 404, "Nonexistent network should return 404"
+        assert response.status_code == 404, "Rede inexistente deve retornar 404"
     
     def test_system_validates_json_format_in_requests(self, isolated_client_with_auth, admin_auth_headers):
-        """System should validate JSON format and reject malformed requests."""
+        """Sistema deve validar formato JSON e rejeitar requisições malformadas."""
         response = isolated_client_with_auth.post(
             "/api/v1/rede/criar",
-            data="invalid json content",
+            data="conteúdo json inválido",
             headers={**admin_auth_headers, "Content-Type": "application/json"}
         )
         
-        assert response.status_code == 422, "Invalid JSON should be rejected"
+        assert response.status_code == 422, "JSON inválido deve ser rejeitado"
     
     def test_system_validates_required_fields_in_network_data(self, isolated_client_with_auth, admin_auth_headers):
-        """System should validate presence of required fields in network data."""
-        incomplete_data = {"nome": "Incomplete Network"}  # Missing nodes and edges
+        """Sistema deve validar presença de campos obrigatórios nos dados de rede."""
+        incomplete_data = {"nome": "Rede Incompleta"}  # Faltam nodes e edges
         
         response = isolated_client_with_auth.post(
             "/api/v1/rede/criar",
@@ -538,14 +538,14 @@ class TestErrorHandlingAndValidation:
             headers=admin_auth_headers
         )
         
-        assert response.status_code == 422, "Incomplete network data should be rejected"
+        assert response.status_code == 422, "Dados de rede incompletos devem ser rejeitados"
     
     def test_system_handles_invalid_json_file_uploads(self, isolated_client_with_auth, admin_auth_headers, tmp_path):
-        """System should handle malformed JSON files gracefully."""
-        # Create file with invalid JSON
+        """Sistema deve lidar com arquivos JSON malformados graciosamente."""
+        # Cria arquivo com JSON inválido
         invalid_json_file = tmp_path / "invalid.json"
         with open(invalid_json_file, "w") as f:
-            f.write("{invalid json content")
+            f.write("{conteúdo json inválido")
         
         with open(invalid_json_file, "rb") as f:
             response = isolated_client_with_auth.post(
@@ -554,12 +554,12 @@ class TestErrorHandlingAndValidation:
                 headers=admin_auth_headers
             )
         
-        assert response.status_code == 422, "Invalid JSON file should be rejected"
-        assert "detail" in response.json(), "Should provide error details"
+        assert response.status_code == 422, "Arquivo JSON inválido deve ser rejeitado"
+        assert "detail" in response.json(), "Deve fornecer detalhes do erro"
     
     def test_system_handles_invalid_json_data_imports(self, isolated_client_with_auth, admin_auth_headers):
-        """System should validate JSON data structure during direct import."""
-        invalid_data = {"nome": "Invalid Network"}  # Missing required elements
+        """Sistema deve validar estrutura de dados JSON durante importação direta."""
+        invalid_data = {"nome": "Rede Inválida"}  # Faltam elementos obrigatórios
         
         response = isolated_client_with_auth.post(
             "/api/v1/integracao/importar/json-data",
@@ -567,156 +567,156 @@ class TestErrorHandlingAndValidation:
             headers=admin_auth_headers
         )
         
-        assert response.status_code == 422, "Invalid network structure should be rejected"
-        assert "detail" in response.json(), "Should provide validation error details"
+        assert response.status_code == 422, "Estrutura de rede inválida deve ser rejeitada"
+        assert "detail" in response.json(), "Deve fornecer detalhes de erro de validação"
 
 
 class TestCompleteWorkflows:
-    """Tests complete end-to-end workflows and integration scenarios."""
+    """Testa fluxos de trabalho completos e cenários de integração."""
     
     def test_complete_network_creation_and_analysis_workflow(self, isolated_client_with_auth, sample_network_data):
-        """Users should be able to complete full network lifecycle from creation to analysis."""
-        # 1. Authenticate
+        """Usuários devem conseguir completar ciclo completo de vida da rede desde criação até análise."""
+        # 1. Autentica
         login_response = isolated_client_with_auth.post(
             "/api/v1/auth/login-json",
             json={"username": "admin", "password": "secret"}
         )
-        assert login_response.status_code == 200, "Authentication should succeed"
+        assert login_response.status_code == 200, "Autenticação deve ter sucesso"
         
         token = login_response.json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}
         
-        # 2. Create network
+        # 2. Cria rede
         create_response = isolated_client_with_auth.post(
             "/api/v1/rede/criar",
             json=sample_network_data,
             headers=headers
         )
-        assert create_response.status_code == 201, "Network creation should succeed"
+        assert create_response.status_code == 201, "Criação de rede deve ter sucesso"
         network_id = create_response.json()["data"]["rede_id"]
         
-        # 3. Verify network appears in listing
+        # 3. Verifica se rede aparece na listagem
         list_response = isolated_client_with_auth.get("/api/v1/rede/listar", headers=headers)
-        assert list_response.status_code == 200, "Network listing should be accessible"
-        assert len(list_response.json()) > 0, "Should have at least one network"
+        assert list_response.status_code == 200, "Listagem de redes deve ser acessível"
+        assert len(list_response.json()) > 0, "Deve ter pelo menos uma rede"
         
-        # 4. Get detailed network information
+        # 4. Obtém informações detalhadas da rede
         info_response = isolated_client_with_auth.get(f"/api/v1/rede/{network_id}/info", headers=headers)
-        assert info_response.status_code == 200, "Network info should be accessible"
+        assert info_response.status_code == 200, "Informações da rede devem ser acessíveis"
         info = info_response.json()
-        assert info["nome"] == sample_network_data["nome"], "Should return correct network details"
+        assert info["nome"] == sample_network_data["nome"], "Deve retornar detalhes corretos da rede"
         
-        # 5. Validate network structure
+        # 5. Valida estrutura da rede
         validate_response = isolated_client_with_auth.get(f"/api/v1/rede/{network_id}/validar", headers=headers)
-        assert validate_response.status_code == 200, "Network validation should be accessible"
+        assert validate_response.status_code == 200, "Validação de rede deve ser acessível"
         
-        # 6. Prepare flow calculations
+        # 6. Prepara cálculos de fluxo
         flow_data = {"origem": "depot_test", "destino": "zone_test"}
         flow_response = isolated_client_with_auth.post(
             f"/api/v1/rede/{network_id}/fluxo/preparar",
             json=flow_data,
             headers=headers
         )
-        assert flow_response.status_code == 200, "Flow preparation should succeed"
+        assert flow_response.status_code == 200, "Preparação de fluxo deve ter sucesso"
         
-        # 7. Get network statistics
+        # 7. Obtém estatísticas da rede
         stats_response = isolated_client_with_auth.get(f"/api/v1/rede/{network_id}/estatisticas", headers=headers)
-        assert stats_response.status_code == 200, "Statistics should be accessible"
+        assert stats_response.status_code == 200, "Estatísticas devem ser acessíveis"
     
     @pytest.mark.parametrize("client_count", [10, 50, 100])
     def test_maceio_network_generation_and_validation_workflow(self, isolated_client_with_auth, admin_auth_headers, client_count):
-        """System should handle complete Maceió network generation and validation for various sizes."""
-        # 1. Generate Maceió network
-        network_name = f"Maceió Test {client_count} Clients - {int(time.time())}"
+        """Sistema deve lidar com geração e validação completa de rede de Maceió para vários tamanhos."""
+        # 1. Gera rede de Maceió
+        network_name = f"Teste Maceió {client_count} Clientes - {int(time.time())}"
         create_response = isolated_client_with_auth.post(
             "/api/v1/rede/criar-maceio-completo",
             json={"num_clientes": client_count, "nome_rede": network_name},
             headers=admin_auth_headers
         )
         
-        assert create_response.status_code == 201, f"Maceió network creation should succeed for {client_count} clients"
+        assert create_response.status_code == 201, f"Criação de rede de Maceió deve ter sucesso para {client_count} clientes"
         data = create_response.json()
-        assert data["status"] == "success", "Creation should report success"
+        assert data["status"] == "success", "Criação deve reportar sucesso"
         network_id = data["data"]["rede_id"]
         
-        # 2. Validate generated network
+        # 2. Valida rede gerada
         validate_response = isolated_client_with_auth.get(f"/api/v1/rede/{network_id}/validar", headers=admin_auth_headers)
-        assert validate_response.status_code == 200, "Validation should be accessible"
+        assert validate_response.status_code == 200, "Validação deve ser acessível"
         
         validation = validate_response.json()
-        assert validation["status"] == "valid", f"Generated network with {client_count} clients should be valid"
+        assert validation["status"] == "valid", f"Rede gerada com {client_count} clientes deve ser válida"
         
-        # 3. Verify validation data structure
-        assert "data" in validation, "Validation should include detailed data"
+        # 3. Verifica estrutura de dados de validação
+        assert "data" in validation, "Validação deve incluir dados detalhados"
         val_data = validation["data"]
-        assert "resumo" in val_data, "Should include summary information"
-        assert "problemas" in val_data, "Should include problems list"
-        assert len(val_data["problemas"]) == 0, f"Valid network should have no problems: {val_data.get('problemas', [])}"
+        assert "resumo" in val_data, "Deve incluir informações resumidas"
+        assert "problemas" in val_data, "Deve incluir lista de problemas"
+        assert len(val_data["problemas"]) == 0, f"Rede válida não deve ter problemas: {val_data.get('problemas', [])}"
         
-        # 4. Verify network has expected structure
+        # 4. Verifica se rede tem estrutura esperada
         resumo = val_data["resumo"]
-        assert "total_clientes" in resumo, "Summary should include client count"
-        assert resumo["total_clientes"] > 0, "Network should have clients"
-        assert "total_rotas" in resumo, "Summary should include route count"
-        assert resumo["total_rotas"] > 0, "Network should have routes"
+        assert "total_clientes" in resumo, "Resumo deve incluir contagem de clientes"
+        assert resumo["total_clientes"] > 0, "Rede deve ter clientes"
+        assert "total_rotas" in resumo, "Resumo deve incluir contagem de rotas"
+        assert resumo["total_rotas"] > 0, "Rede deve ter rotas"
     
     def test_data_import_and_network_analysis_workflow(self, isolated_client_with_auth, admin_auth_headers, sample_network_data):
-        """Users should be able to import data and immediately analyze the resulting network."""
-        # 1. Import network data
+        """Usuários devem conseguir importar dados e analisar imediatamente a rede resultante."""
+        # 1. Importa dados de rede
         import_response = isolated_client_with_auth.post(
             "/api/v1/integracao/importar/json-data",
             json=sample_network_data,
             headers=admin_auth_headers
         )
-        assert import_response.status_code == 201, "Data import should succeed"
+        assert import_response.status_code == 201, "Importação de dados deve ter sucesso"
         network_id = import_response.json()["data"]["rede_id"]
         
-        # 2. Immediately analyze imported network
+        # 2. Analisa imediatamente rede importada
         info_response = isolated_client_with_auth.get(f"/api/v1/rede/{network_id}/info", headers=admin_auth_headers)
-        assert info_response.status_code == 200, "Imported network info should be accessible"
+        assert info_response.status_code == 200, "Informações da rede importada devem ser acessíveis"
         
         info = info_response.json()
-        assert info["nome"] == sample_network_data["nome"], "Should preserve imported network name"
-        assert info["total_nodes"] == len(sample_network_data["nodes"]), "Should preserve node count"
-        assert info["total_edges"] == len(sample_network_data["edges"]), "Should preserve edge count"
+        assert info["nome"] == sample_network_data["nome"], "Deve preservar nome da rede importada"
+        assert info["total_nodes"] == len(sample_network_data["nodes"]), "Deve preservar contagem de nós"
+        assert info["total_edges"] == len(sample_network_data["edges"]), "Deve preservar contagem de arestas"
         
-        # 3. Validate imported network structure
+        # 3. Valida estrutura da rede importada
         validate_response = isolated_client_with_auth.get(f"/api/v1/rede/{network_id}/validar", headers=admin_auth_headers)
-        assert validate_response.status_code == 200, "Imported network validation should work"
+        assert validate_response.status_code == 200, "Validação de rede importada deve funcionar"
 
 
 class TestDatabaseOperations:
-    """Tests database operations and data persistence behaviors."""
+    """Testa operações de banco de dados e comportamentos de persistência de dados."""
     
     def test_database_initializes_with_required_tables(self):
-        """Database should create all required tables on initialization."""
+        """Banco de dados deve criar todas as tabelas necessárias na inicialização."""
         temp_dir = tempfile.mkdtemp(prefix="test_db_init_")
         try:
             db_path = os.path.join(temp_dir, "test_init.db")
             db = SQLiteDB(db_path=db_path)
             
-            # Check that required tables exist
+            # Verifica se tabelas necessárias existem
             with db._get_conn() as conn:
                 cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
                 tables = [row[0] for row in cursor.fetchall()]
             
-            assert "redes" in tables, "Should create networks table"
-            assert "users" in tables, "Should create users table"
+            assert "redes" in tables, "Deve criar tabela de redes"
+            assert "users" in tables, "Deve criar tabela de usuários"
             
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
     
     def test_networks_persist_correctly_in_database(self):
-        """Network data should be saved and retrieved accurately from database."""
+        """Dados de rede devem ser salvos e recuperados com precisão do banco de dados."""
         temp_dir = tempfile.mkdtemp(prefix="test_db_persist_")
         try:
             db_path = os.path.join(temp_dir, "test_persist.db")
             db = SQLiteDB(db_path=db_path)
             
-            # Save network
+            # Salva rede
             network_id = f"persist_test_{int(time.time())}"
-            name = "Persistence Test Network"
-            description = "Test network for persistence validation"
+            name = "Rede de Teste de Persistência"
+            description = "Rede de teste para validação de persistência"
             data = {
                 "nome": name,
                 "descricao": description,
@@ -726,115 +726,115 @@ class TestDatabaseOperations:
             
             db.salvar_rede(network_id, name, description, data)
             
-            # Retrieve network
+            # Recupera rede
             retrieved = db.carregar_rede(network_id)
             
-            assert retrieved is not None, "Saved network should be retrievable"
-            assert retrieved["nome"] == name, "Network name should be preserved"
-            assert retrieved["descricao"] == description, "Network description should be preserved"
-            assert "nodes" in retrieved, "Network nodes should be preserved"
-            assert "edges" in retrieved, "Network edges should be preserved"
+            assert retrieved is not None, "Rede salva deve ser recuperável"
+            assert retrieved["nome"] == name, "Nome da rede deve ser preservado"
+            assert retrieved["descricao"] == description, "Descrição da rede deve ser preservada"
+            assert "nodes" in retrieved, "Nós da rede devem ser preservados"
+            assert "edges" in retrieved, "Arestas da rede devem ser preservadas"
             
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
     
     def test_network_listing_includes_metadata(self):
-        """Network listing should include metadata like creation time."""
+        """Listagem de redes deve incluir metadados como horário de criação."""
         temp_dir = tempfile.mkdtemp(prefix="test_db_metadata_")
         try:
             db_path = os.path.join(temp_dir, "test_metadata.db")
             db = SQLiteDB(db_path=db_path)
             
-            # Save multiple networks
+            # Salva múltiplas redes
             for i in range(3):
                 network_id = f"metadata_test_{i}_{int(time.time())}"
                 db.salvar_rede(
                     network_id,
-                    f"Test Network {i}",
-                    f"Description {i}",
-                    {"nome": f"Network {i}", "nodes": [], "edges": []}
+                    f"Rede de Teste {i}",
+                    f"Descrição {i}",
+                    {"nome": f"Rede {i}", "nodes": [], "edges": []}
                 )
             
-            # List networks
+            # Lista redes
             networks = db.listar_redes()
             
-            assert len(networks) >= 3, "Should list all saved networks"
+            assert len(networks) >= 3, "Deve listar todas as redes salvas"
             for network in networks:
-                assert "id" in network, "Should include network ID"
-                assert "nome" in network, "Should include network name"
-                assert "descricao" in network, "Should include description"
-                assert "created_at" in network, "Should include creation timestamp"
+                assert "id" in network, "Deve incluir ID da rede"
+                assert "nome" in network, "Deve incluir nome da rede"
+                assert "descricao" in network, "Deve incluir descrição"
+                assert "created_at" in network, "Deve incluir timestamp de criação"
                 
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
     
     def test_network_removal_works_correctly(self):
-        """Networks should be completely removed from database when deleted."""
+        """Redes devem ser completamente removidas do banco de dados quando deletadas."""
         temp_dir = tempfile.mkdtemp(prefix="test_db_removal_")
         try:
             db_path = os.path.join(temp_dir, "test_removal.db")
             db = SQLiteDB(db_path=db_path)
             
-            # Create network
+            # Cria rede
             network_id = f"removal_test_{int(time.time())}"
             db.salvar_rede(
                 network_id,
-                "Network to Remove",
-                "Will be deleted",
-                {"nome": "Removable Network", "nodes": [], "edges": []}
+                "Rede para Remover",
+                "Será deletada",
+                {"nome": "Rede Removível", "nodes": [], "edges": []}
             )
             
-            # Verify existence
+            # Verifica existência
             before_removal = db.carregar_rede(network_id)
-            assert before_removal is not None, "Network should exist before removal"
+            assert before_removal is not None, "Rede deve existir antes da remoção"
             
-            # Remove network
+            # Remove rede
             db.remover_rede(network_id)
             
-            # Verify removal
+            # Verifica remoção
             after_removal = db.carregar_rede(network_id)
-            assert after_removal is None, "Network should not exist after removal"
+            assert after_removal is None, "Rede não deve existir após remoção"
             
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
     
     def test_user_data_operations_work_correctly(self):
-        """User CRUD operations should work correctly in database."""
+        """Operações CRUD de usuário devem funcionar corretamente no banco de dados."""
         temp_dir = tempfile.mkdtemp(prefix="test_db_users_")
         try:
             db_path = os.path.join(temp_dir, "test_users.db")
             db = SQLiteDB(db_path=db_path)
             
-            # Default users should exist
+            # Usuários padrão devem existir
             users = db.listar_usuarios()
-            assert len(users) >= 3, "Should have default users"
+            assert len(users) >= 3, "Deve ter usuários padrão"
             
             usernames = [u["username"] for u in users]
-            assert "admin" in usernames, "Should include admin user"
-            assert "operator" in usernames, "Should include operator user"  
-            assert "viewer" in usernames, "Should include viewer user"
+            assert "admin" in usernames, "Deve incluir usuário admin"
+            assert "operator" in usernames, "Deve incluir usuário operator"  
+            assert "viewer" in usernames, "Deve incluir usuário viewer"
             
-            # Test user creation
+            # Testa criação de usuário
             username = f"test_user_{int(time.time())}"
             success = db.criar_usuario(
                 username=username,
                 email=f"{username}@test.com",
-                full_name="Test User",
-                hashed_password="hashed_password_placeholder",
+                full_name="Usuário de Teste",
+                hashed_password="senha_hash_placeholder",
                 permissions=["read", "write"]
             )
-            assert success is True, "User creation should succeed"
+            assert success is True, "Criação de usuário deve ter sucesso"
             
-            # Test user retrieval
+            # Testa recuperação de usuário
             user = db.buscar_usuario_por_username(username)
-            assert user is not None, "Created user should be retrievable"
-            assert user["username"] == username, "Should return correct username"
-            assert user["email"] == f"{username}@test.com", "Should return correct email"
+            assert user is not None, "Usuário criado deve ser recuperável"
+            assert user["username"] == username, "Deve retornar nome de usuário correto"
+            assert user["email"] == f"{username}@test.com", "Deve retornar email correto"
             
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
-    print("Backend API Behavior Tests")
-    print("Run with: pytest test_backend_behaviors.py -v")
+    print("Testes de Comportamento da API Backend")
+    print("Execute com: pytest test_backend_behaviors.py -v")
