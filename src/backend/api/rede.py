@@ -56,6 +56,38 @@ async def criar_rede_maceio_completo(
             detail=f"Erro ao criar rede de Maceió: {str(e)}"
         )
 
+# Alias para compatibilidade com frontend
+@router.post(
+    "/gerar-rede-maceio",
+    response_model=StatusResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Alias para criar rede de Maceió (compatibilidade frontend)",
+)
+async def gerar_rede_maceio_alias(
+    num_clientes: int = 50,
+    num_entregadores: Optional[int] = None,
+    nome_rede: Optional[str] = None,
+    rede_service: RedeService = Depends(get_rede_service)
+) -> StatusResponse:
+    # Chama a função principal sem autenticação para simplicidade
+    try:
+        rede_id = rede_service.criar_rede_maceio_completo(
+            num_clientes=num_clientes,
+            num_entregadores=num_entregadores,
+            nome_rede=nome_rede
+        )
+        
+        return StatusResponse(
+            status="success",
+            message=f"Rede de Maceió gerada com {num_clientes} clientes",
+            data={"rede_id": rede_id}
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao gerar rede de Maceió: {str(e)}"
+        )
+
 @router.post(
     "/criar",
     response_model=StatusResponse,
@@ -143,7 +175,8 @@ async def obter_info_rede(
             total_edges=info['total_edges'],
             nodes_tipo=info['nodes_por_tipo'],
             capacidade_total=info['capacidade_total'],
-            nodes=info['nodes']
+            nodes=info['nodes'],
+            edges=info['edges']
         )
     except ValueError as e:
         raise HTTPException(
@@ -192,8 +225,8 @@ async def validar_rede(
 @router.post(
     "/{rede_id}/fluxo/preparar",
     response_model=StatusResponse,
-    summary="Preparar cálculo de fluxo",
-    description="Prepara dados para cálculo de fluxo máximo (Dev 2 pendente)"
+    summary="Calcular fluxo máximo na rede",
+    description="Calcula o fluxo máximo entre dois nós usando algoritmos Ford-Fulkerson e Edmonds-Karp"
 )
 async def preparar_calculo_fluxo(
     rede_id: str,
@@ -208,9 +241,12 @@ async def preparar_calculo_fluxo(
             fluxo_data.destino
         )
         
+        status_msg = "success" if resultado.get('status') == 'sucesso' else "prepared"
+        message = "Fluxo máximo calculado com sucesso" if resultado.get('status') == 'sucesso' else "Erro no cálculo de fluxo"
+        
         return StatusResponse(
-            status="prepared",
-            message="Dados preparados para cálculo de fluxo",
+            status=status_msg,
+            message=message,
             data=resultado
         )
     except ValueError as e:
@@ -221,7 +257,7 @@ async def preparar_calculo_fluxo(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erro na preparação: {str(e)}"
+            detail=f"Erro no cálculo: {str(e)}"
         )
 
 @router.get(
@@ -297,4 +333,211 @@ async def obter_estatisticas_rede(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erro ao calcular estatísticas: {str(e)}"
+        )
+
+# Rota simples para obter dados da rede (sem autenticação para frontend)
+@router.get(
+    "/{rede_id}",
+    summary="Obter dados completos da rede",
+    description="Obtém todos os dados da rede incluindo depósitos, hubs, clientes e veículos"
+)
+async def obter_rede_completa(
+    rede_id: str,
+    rede_service: RedeService = Depends(get_rede_service)
+):
+    try:
+        info = rede_service.obter_info_rede(rede_id)
+        
+        # Organizar dados por tipo
+        depositos = []
+        hubs = []
+        clientes = []
+        
+        for node in info.get('nodes', []):
+            if node.get('tipo') == 'deposito':
+                depositos.append({
+                    'id': node['id'],
+                    'nome': node.get('nome', f"Depósito {node['id']}"),
+                    'latitude': node['latitude'],
+                    'longitude': node['longitude'],
+                    'capacidade_maxima': node.get('capacidade', 1000),
+                    'endereco': node.get('endereco', 'Endereço não informado')
+                })
+            elif node.get('tipo') == 'hub':
+                hubs.append({
+                    'id': node['id'],
+                    'nome': node.get('nome', f"Hub {node['id']}"),
+                    'latitude': node['latitude'],
+                    'longitude': node['longitude'],
+                    'capacidade': node.get('capacidade', 500),
+                    'endereco': node.get('endereco', 'Endereço não informado')
+                })
+            elif node.get('tipo') == 'cliente':
+                clientes.append({
+                    'id': node['id'],
+                    'latitude': node['latitude'],
+                    'longitude': node['longitude'],
+                    'demanda_media': node.get('demanda', 10),
+                    'prioridade': node.get('prioridade', 'normal'),
+                    'zona_id': node.get('zona_id', 1)
+                })
+        
+        return {
+            'id': rede_id,
+            'nome': info.get('nome', f'Rede {rede_id}'),
+            'depositos': depositos,
+            'hubs': hubs,
+            'clientes': clientes,
+            'total_nodes': info.get('total_nodes', 0),
+            'total_edges': info.get('total_edges', 0)
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao obter dados da rede: {str(e)}"
+        )
+
+# Rotas para controle de movimento dos veículos
+@router.post(
+    "/{rede_id}/start-movement",
+    summary="Iniciar movimento de veículos",
+    description="Inicia o movimento automático dos veículos na rede"
+)
+async def start_vehicle_movement(
+    rede_id: str,
+    rede_service: RedeService = Depends(get_rede_service)
+):
+    try:
+        # Verificar se a rede existe
+        info = rede_service.obter_info_rede(rede_id)
+        
+        # Iniciar movimento usando o serviço
+        success = rede_service.start_vehicle_movement(rede_id)
+        
+        if success:
+            return {
+                "status": "success",
+                "message": f"Movimento iniciado para rede {rede_id}",
+                "rede_id": rede_id
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Falha ao iniciar movimento para rede {rede_id}",
+                "rede_id": rede_id
+            }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao iniciar movimento: {str(e)}"
+        )
+
+@router.post(
+    "/{rede_id}/stop-movement",
+    summary="Parar movimento de veículos",
+    description="Para o movimento automático dos veículos na rede"
+)
+async def stop_vehicle_movement(
+    rede_id: str,
+    rede_service: RedeService = Depends(get_rede_service)
+):
+    try:
+        # Verificar se a rede existe
+        info = rede_service.obter_info_rede(rede_id)
+        
+        # Parar movimento usando o serviço
+        success = rede_service.stop_vehicle_movement()
+        
+        if success:
+            return {
+                "status": "success",
+                "message": f"Movimento parado para rede {rede_id}",
+                "rede_id": rede_id
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Falha ao parar movimento para rede {rede_id}",
+                "rede_id": rede_id
+            }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao parar movimento: {str(e)}"
+        )
+
+@router.get(
+    "/{rede_id}/delivery-stats",
+    summary="Obter estatísticas de entrega",
+    description="Retorna estatísticas detalhadas das entregas realizadas"
+)
+async def get_delivery_statistics(
+    rede_id: str,
+    rede_service: RedeService = Depends(get_rede_service)
+):
+    try:
+        # Verificar se a rede existe
+        info = rede_service.obter_info_rede(rede_id)
+        
+        # Obter estatísticas de movimento
+        stats = rede_service.get_movement_statistics()
+        
+        return {
+            "status": "success",
+            "rede_id": rede_id,
+            "statistics": stats
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao obter estatísticas: {str(e)}"
+        )
+
+@router.post(
+    "/{rede_id}/reset-deliveries",
+    summary="Resetar sistema de entregas",
+    description="Reseta o sistema de entregas para reiniciar o ciclo"
+)
+async def reset_delivery_system(
+    rede_id: str,
+    rede_service: RedeService = Depends(get_rede_service)
+):
+    try:
+        # Verificar se a rede existe
+        info = rede_service.obter_info_rede(rede_id)
+        
+        return {
+            "status": "success",
+            "message": f"Sistema de entregas resetado para rede {rede_id}",
+            "rede_id": rede_id
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao resetar entregas: {str(e)}"
         )

@@ -1,0 +1,1182 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Rastreamento - Maceió</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        #map {
+            width: 100%;
+            height: 100vh;
+        }
+        
+        /* Painel de informações */
+        .info-panel {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 1000;
+            min-width: 250px;
+            font-size: 14px;
+        }
+        
+        .info-panel h3 {
+            margin: 0 0 10px 0;
+            color: #333;
+            font-size: 16px;
+        }
+        
+        .status-item {
+            margin: 5px 0;
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        .status-item span:first-child {
+            color: #666;
+        }
+        
+        .status-item span:last-child {
+            font-weight: bold;
+            color: #2563eb;
+        }
+        
+        /* Indicador de conexão */
+        .connection-status {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 8px 12px;
+            border-radius: 6px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 1000;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ef4444;
+            animation: pulse 2s infinite;
+        }
+        
+        .status-dot.connected {
+            background: #10b981;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        /* Controles */
+        .controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 1000;
+        }
+        
+        .controls button {
+            background: #2563eb;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin: 0 5px;
+            font-size: 14px;
+        }
+        
+        .controls button:hover {
+            background: #1d4ed8;
+        }
+        
+        .controls button:disabled {
+            background: #94a3b8;
+            cursor: not-allowed;
+        }
+        
+        /* Ícones personalizados de veículos */
+        .vehicle-icon {
+            border-radius: 50%;
+            border: 2px solid white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .vehicle-moto { background: #3b82f6; }
+        .vehicle-van { background: #f59e0b; }
+        .vehicle-caminhao { background: #dc2626; }
+        
+        /* Ícones de pontos */
+        .deposito-icon { 
+            background: transparent; 
+        }
+        
+        .hub-icon { 
+            background: transparent; 
+        }
+        
+        .cliente-icon { 
+            background: #dc2626; 
+            border-radius: 50%;
+        }
+        
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 2000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(2px);
+        }
+        
+        .modal-content {
+            background: white;
+            margin: 5% auto;
+            padding: 25px;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 500px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            position: relative;
+            animation: modalSlideIn 0.3s ease-out;
+        }
+        
+        @keyframes modalSlideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-50px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        
+        .modal-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #1f2937;
+            margin: 0;
+        }
+        
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #6b7280;
+            padding: 0;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            transition: all 0.2s;
+        }
+        
+        .close-btn:hover {
+            background: #f3f4f6;
+            color: #374151;
+        }
+        
+        .modal-body {
+            margin-bottom: 20px;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        .form-label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #374151;
+            font-size: 14px;
+        }
+        
+        .form-input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+        
+        .form-input:focus {
+            outline: none;
+            border-color: #2563eb;
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+        
+        .form-select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 14px;
+            background: white;
+            cursor: pointer;
+        }
+        
+        .existing-networks {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            padding: 10px;
+            background: #f9fafb;
+        }
+        
+        .network-item {
+            padding: 8px 12px;
+            border-radius: 4px;
+            margin-bottom: 5px;
+            cursor: pointer;
+            transition: background 0.2s;
+            border: 1px solid transparent;
+        }
+        
+        .network-item:hover {
+            background: #e5e7eb;
+        }
+        
+        .network-item.selected {
+            background: #dbeafe;
+            border-color: #2563eb;
+        }
+        
+        .network-item-name {
+            font-weight: 500;
+            color: #1f2937;
+        }
+        
+        .network-item-info {
+            font-size: 12px;
+            color: #6b7280;
+            margin-top: 2px;
+        }
+        
+        .modal-footer {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            padding-top: 15px;
+            border-top: 1px solid #e5e7eb;
+        }
+        
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        
+        .btn-secondary {
+            background: #f3f4f6;
+            color: #374151;
+        }
+        
+        .btn-secondary:hover {
+            background: #e5e7eb;
+        }
+        
+        .btn-primary {
+            background: #2563eb;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #1d4ed8;
+        }
+        
+        .btn-success {
+            background: #059669;
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: #047857;
+        }
+        
+        .radio-group {
+            display: flex;
+            gap: 15px;
+            margin-top: 10px;
+        }
+        
+        .radio-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .radio-item input[type="radio"] {
+            margin: 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <!-- Painel de informações -->
+    <div class="info-panel">
+        <h3>🚚 Sistema Maceió</h3>
+        <div class="status-item">
+            <span>Veículos Ativos:</span>
+            <span id="activeVehicles">0</span>
+        </div>
+        <div class="status-item">
+            <span>Total de Rotas:</span>
+            <span id="totalRoutes">0</span>
+        </div>
+        <div class="status-item">
+            <span>Última Atualização:</span>
+            <span id="lastUpdate">-</span>
+        </div>
+        <div class="status-item">
+            <span>Rede:</span>
+            <span id="networkId">-</span>
+        </div>
+    </div>
+    
+    <!-- Controles -->
+    <div class="controls">
+        <button onclick="generateNetwork()">Carregar/Gerar Rede</button>
+        <button onclick="startTracking()" id="startBtn">Iniciar Rastreamento</button>
+        <button onclick="stopTracking()" id="stopBtn" disabled>Parar</button>
+    </div>
+
+    <!-- Modal para configuração da rede -->
+    <div id="networkModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">🌐 Configurar Rede de Entrega</h3>
+                <button class="close-btn" onclick="closeModal()">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <!-- Seleção de ação -->
+                <div class="form-group">
+                    <label class="form-label">📋 Escolha uma opção:</label>
+                    <div class="radio-group">
+                        <div class="radio-item">
+                            <input type="radio" id="useExisting" name="networkAction" value="existing" onchange="toggleNetworkOptions()">
+                            <label for="useExisting">Carregar rede existente</label>
+                        </div>
+                        <div class="radio-item">
+                            <input type="radio" id="createNew" name="networkAction" value="new" checked onchange="toggleNetworkOptions()">
+                            <label for="createNew">Criar nova rede</label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Lista de redes existentes -->
+                <div id="existingNetworksSection" class="form-group" style="display: none;">
+                    <label class="form-label">🗂️ Redes Disponíveis:</label>
+                    <div id="existingNetworksList" class="existing-networks">
+                        <!-- Preenchido dinamicamente -->
+                    </div>
+                </div>
+
+                <!-- Configurações para nova rede -->
+                <div id="newNetworkSection" class="form-group">
+                    <div class="form-group">
+                        <label class="form-label">📛 Nome da Rede:</label>
+                        <input type="text" id="networkName" class="form-input" placeholder="Ex: Rede Maceió Centro" value="Rede_Maceio">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">👥 Número de Clientes:</label>
+                        <input type="number" id="numClients" class="form-input" min="10" max="200" value="50">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">🚚 Número de Entregadores (opcional):</label>
+                        <input type="number" id="numDeliverers" class="form-input" min="1" max="20" placeholder="Automático se vazio">
+                    </div>
+                </div>
+            </div>
+            
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+                <button id="confirmBtn" class="btn btn-primary" onclick="confirmNetworkSelection()">Criar Rede</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        // Configuração inicial
+        let map;
+        let websocket;
+        let vehicles = new Map();
+        let depositos = new Map();
+        let hubs = new Map();
+        let clientes = new Map();
+        let routes = new Map();
+        let isTracking = false;
+        let currentNetworkId = null;
+        let accessToken = null;
+        
+        // Inicializar mapa centrado em Maceió
+        function initMap() {
+            map = L.map('map').setView([-9.6658, -35.7350], 12);
+            
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+            
+            console.log('✓ Mapa inicializado');
+        }
+        
+        // Conectar WebSocket
+        function connectWebSocket(redeId) {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const token = localStorage.getItem('accessToken');
+            console.log('🔌 Conectando WebSocket com token:', token ? token.substring(0, 20) + '...' : 'null');
+            const wsUrl = `${protocol}//${window.location.host}/tracking/${redeId}?token=${token}`;
+            
+            try {
+                websocket = new WebSocket(wsUrl);
+                
+                websocket.onopen = function(event) {
+                    console.log('✓ WebSocket conectado');
+                    updateConnectionStatus(true);
+                };
+                
+                websocket.onmessage = function(event) {
+                    const data = JSON.parse(event.data);
+                    handleWebSocketMessage(data);
+                };
+                
+                websocket.onclose = function(event) {
+                    console.log('✗ WebSocket desconectado');
+                    updateConnectionStatus(false);
+                    
+                    // Tentar reconectar após 5 segundos
+                    if (isTracking) {
+                        setTimeout(() => connectWebSocket(redeId), 5000);
+                    }
+                };
+                
+                websocket.onerror = function(error) {
+                    console.error('❌ Erro WebSocket:', error);
+                    updateConnectionStatus(false);
+                };
+                
+            } catch (error) {
+                console.error('❌ Erro ao conectar WebSocket:', error);
+                updateConnectionStatus(false);
+            }
+        }
+        
+        // Atualizar status de conexão
+        function updateConnectionStatus(connected) {
+            const dot = document.getElementById('connectionDot');
+            const text = document.getElementById('connectionText');
+        }
+        
+        // Processar mensagens do WebSocket
+        function handleWebSocketMessage(data) {
+            console.log('📨 Dados recebidos:', data);
+            
+            if (data.type === 'network_update') {
+                updateNetworkDisplay(data);
+            } else if (data.type === 'initial_data') {
+                console.log('📊 Dados iniciais recebidos:', data.data);
+                if (data.data) {
+                    updateNetworkDisplay(data.data);
+                }
+            } else if (data.type === 'network_created') {
+                currentNetworkId = data.rede_id;
+                document.getElementById('networkId').textContent = data.rede_id;
+                console.log('✓ Rede criada:', data.rede_id);
+                loadNetworkData(data.rede_id);
+            } else if (data.type === 'error') {
+                console.error('❌ Erro do WebSocket:', data.message);
+            }
+        }
+        
+        // Atualizar display da rede
+        function updateNetworkDisplay(data) {
+            console.log('🔄 Atualizando display da rede:', data);
+            
+            // Verificar se temos dados de rede inicial (formato exportar_dados_websocket)
+            if (data.network_info && data.network_info.nodes) {
+                console.log('📊 Dados iniciais da rede detectados');
+                displayNetworkFromInitialData(data.network_info);
+            }
+            
+            // Atualizar estatísticas
+            if (data.estatisticas) {
+                console.log('📊 Estatísticas:', data.estatisticas);
+                
+                // Atualizar veículos ativos (usar dados corretos)
+                const vehiculosAtivos = data.estatisticas.veiculos?.ativos || 
+                                      data.estatisticas.veiculos_ativos || 0;
+                document.getElementById('activeVehicles').textContent = vehiculosAtivos;
+                
+                // Atualizar rotas ativas
+                const rotasAtivas = data.estatisticas.rotas?.ativas || 
+                                  data.estatisticas.rotas_ativas || 0;
+                document.getElementById('totalRoutes').textContent = rotasAtivas;
+            }
+            
+            // Atualizar timestamp
+            if (data.timestamp) {
+                const time = new Date(data.timestamp).toLocaleTimeString();
+                document.getElementById('lastUpdate').textContent = time;
+            }
+                 // Atualizar posições de veículos (suporta ambos os formatos)
+        let vehiclePositions = data.posicoes_veiculos || data.vehicles;
+        if (vehiclePositions && vehiclePositions.length > 0) {
+            console.log('🚗 Posições de veículos recebidas:', vehiclePositions.length, 'veículos');
+            console.log('📍 Dados dos veículos:', vehiclePositions);
+            updateVehiclePositions(vehiclePositions);
+        } else {
+            console.log('⚠️ Nenhuma posição de veículo recebida');
+            console.log('📊 Dados completos recebidos:', data);
+        }
+        }
+        
+        // Função para processar dados iniciais da rede (formato exportar_dados_websocket)
+        function displayNetworkFromInitialData(networkInfo) {
+            console.log('🗺️ Processando dados iniciais da rede:', networkInfo);
+            
+            if (networkInfo.nodes && networkInfo.nodes.length > 0) {
+                console.log('📍 Processando nós da rede:', networkInfo.nodes.length, 'nós');
+                
+                networkInfo.nodes.forEach(node => {
+                    if (node.type === 'depot') {
+                        const icon = L.divIcon({
+                            className: 'deposito-icon',
+                            html: '🏭',
+                            iconSize: [50, 50],
+                            iconAnchor: [15, 15]
+                        });
+                        
+                        const marker = L.marker(node.coordinates, { icon }).addTo(map);
+                        marker.bindPopup(`
+                            <b>Depósito: ${node.name}</b><br>
+                            Capacidade: ${node.capacity}
+                        `);
+                        depositos.set(node.id, marker);
+                        
+                    } else if (node.type === 'hub') {
+                        const icon = L.divIcon({
+                            className: 'hub-icon',
+                            html: '🏢',
+                            iconSize: [50, 50],
+                            iconAnchor: [12, 12]
+                        });
+                        
+                        const marker = L.marker(node.coordinates, { icon }).addTo(map);
+                        marker.bindPopup(`
+                            <b>Hub: ${node.name}</b><br>
+                            Capacidade: ${node.capacity}
+                        `);
+                        hubs.set(node.id, marker);
+                        
+                    } else if (node.type === 'client') {
+                        const icon = L.divIcon({
+                            className: 'cliente-icon',
+                            html: '👤',
+                            iconSize: [15, 15],
+                            iconAnchor: [7, 7]
+                        });
+                        
+                        const marker = L.marker(node.coordinates, { icon }).addTo(map);
+                        marker.bindPopup(`
+                            <b>Cliente: ${node.id}</b><br>
+                            Demanda: ${node.demand}<br>
+                            Prioridade: ${node.priority}
+                        `);
+                        clientes.set(node.id, marker);
+                    }
+                });
+                
+                console.log(`✓ Dados iniciais carregados: ${depositos.size} depósitos, ${hubs.size} hubs, ${clientes.size} clientes`);
+            }
+        }
+        
+        // Atualizar posições dos veículos no mapa
+        function updateVehiclePositions(positions) {
+            console.log('🔄 Atualizando posições de', positions.length, 'veículos');
+            
+            positions.forEach((pos, index) => {
+                console.log(`📍 Veículo ${index + 1}:`, pos);
+                
+                if (vehicles.has(pos.vehicle_id)) {
+                    console.log(`🔄 Atualizando veículo existente: ${pos.vehicle_id}`);
+                    const marker = vehicles.get(pos.vehicle_id);
+                    
+                    // Atualizar posição com animação suave
+                    marker.setLatLng([pos.latitude, pos.longitude]);
+                    
+                    // Atualizar popup com informações
+                    const popup = `
+                        <b>Veículo ${pos.vehicle_id}</b><br>
+                        Status: ${pos.status}<br>
+                        Velocidade: ${pos.speed.toFixed(1)} km/h<br>
+                        Direção: ${pos.heading.toFixed(0)}°<br>
+                        Atualizado: ${new Date(pos.timestamp).toLocaleTimeString()}
+                    `;
+                    marker.setPopupContent(popup);
+                    
+                } else {
+                    console.log(`✅ Criando novo marcador para veículo: ${pos.vehicle_id}`);
+                    // Criar novo marcador de veículo
+                    createVehicleMarker(pos);
+                }
+            });
+            
+            console.log(`📊 Total de veículos no mapa: ${vehicles.size}`);
+        }
+        
+        // Criar marcador de veículo
+        function createVehicleMarker(position) {
+            console.log(`🚗 Criando marcador para veículo ${position.vehicle_id} em [${position.latitude}, ${position.longitude}]`);
+            
+            const vehicleIcon = L.divIcon({
+                className: 'vehicle-icon vehicle-moto',
+                html: '🏍️',
+                iconSize: [24, 24],
+                iconAnchor: [12, 12]
+            });
+            
+            const marker = L.marker([position.latitude, position.longitude], {
+                icon: vehicleIcon
+            }).addTo(map);
+            
+            console.log(`✅ Marcador criado e adicionado ao mapa para veículo ${position.vehicle_id}`);
+            
+            const popup = `
+                <b>Veículo ${position.vehicle_id}</b><br>
+                Status: ${position.status}<br>
+                Velocidade: ${position.speed.toFixed(1)} km/h<br>
+                Direção: ${position.heading.toFixed(0)}°<br>
+                Atualizado: ${new Date(position.timestamp).toLocaleTimeString()}
+            `;
+            marker.bindPopup(popup);
+            
+            vehicles.set(position.vehicle_id, marker);
+            console.log(`📝 Veículo ${position.vehicle_id} adicionado ao cache. Total: ${vehicles.size}`);
+        }
+        
+        // Carregar dados da rede
+        async function loadNetworkData(redeId) {
+            try {
+                const response = await fetch(`/api/v1/rede/${redeId}`, {
+                    method: 'GET',
+                    headers: getAuthHeaders(),
+                    credentials: 'include'
+                });
+                if (response.ok) {
+                    const rede = await response.json();
+                    displayNetworkElements(rede);
+                }
+            } catch (error) {
+                console.error('❌ Erro ao carregar dados da rede:', error);
+            }
+        }
+        
+        // Exibir elementos da rede no mapa
+        function displayNetworkElements(rede) {
+            // Limpar marcadores existentes
+            clearMapElements();
+            
+            // Adicionar depósitos
+            rede.depositos?.forEach(deposito => {
+                const icon = L.divIcon({
+                    className: 'deposito-icon',
+                    html: '🏭',
+                    iconSize: [40, 40],
+                    iconAnchor: [15, 15]
+                });
+                
+                const marker = L.marker([deposito.latitude, deposito.longitude], {
+                    icon: icon
+                }).addTo(map);
+                
+                marker.bindPopup(`
+                    <b>Depósito: ${deposito.nome}</b><br>
+                    Capacidade: ${deposito.capacidade_maxima}<br>
+                    Endereço: ${deposito.endereco}
+                `);
+                
+                depositos.set(deposito.id, marker);
+            });
+            
+            // Adicionar hubs
+            rede.hubs?.forEach(hub => {
+                const icon = L.divIcon({
+                    className: 'hub-icon',
+                    html: '🏢',
+                    iconSize: [40, 40],
+                    iconAnchor: [12, 12]
+                });
+                
+                const marker = L.marker([hub.latitude, hub.longitude], {
+                    icon: icon
+                }).addTo(map);
+                
+                marker.bindPopup(`
+                    <b>Hub: ${hub.nome}</b><br>
+                    Capacidade: ${hub.capacidade}<br>
+                    Endereço: ${hub.endereco}
+                `);
+                
+                hubs.set(hub.id, marker);
+            });
+            
+            // Adicionar alguns clientes (não todos para não poluir o mapa)
+            const clientesAmostra = rede.clientes?.slice(0, 20) || [];
+            clientesAmostra.forEach(cliente => {
+                const icon = L.divIcon({
+                    className: 'cliente-icon',
+                    html: '👤',
+                    iconSize: [15, 15],
+                    iconAnchor: [7, 7]
+                });
+                
+                const marker = L.marker([cliente.latitude, cliente.longitude], {
+                    icon: icon
+                }).addTo(map);
+                
+                marker.bindPopup(`
+                    <b>Cliente: ${cliente.id}</b><br>
+                    Demanda: ${cliente.demanda_media}<br>
+                    Prioridade: ${cliente.prioridade}<br>
+                    Zona: ${cliente.zona_id}
+                `);
+                
+                clientes.set(cliente.id, marker);
+            });
+            
+            console.log(`✓ Rede carregada: ${rede.depositos?.length || 0} depósitos, ${rede.hubs?.length || 0} hubs, ${clientesAmostra.length} clientes`);
+        }
+        
+        // Limpar elementos do mapa
+        function clearMapElements() {
+            vehicles.forEach(marker => map.removeLayer(marker));
+            depositos.forEach(marker => map.removeLayer(marker));
+            hubs.forEach(marker => map.removeLayer(marker));
+            clientes.forEach(marker => map.removeLayer(marker));
+            
+            vehicles.clear();
+            depositos.clear();
+            hubs.clear();
+            clientes.clear();
+        }
+        
+        // Gerar nova rede ou carregar existente
+        async function generateNetwork() {
+            console.log('🔧 Função generateNetwork() chamada');
+            
+            try {
+                // Buscar redes existentes
+                console.log('🔍 Buscando redes existentes...');
+                
+                const listResponse = await fetch('/api/v1/rede/listar', {
+                    method: 'GET',
+                    headers: getAuthHeaders(),
+                    credentials: 'include'
+                });
+                
+                let existingNetworks = [];
+                if (listResponse.ok) {
+                    existingNetworks = await listResponse.json();
+                    console.log('📊 Redes encontradas:', existingNetworks.length);
+                } else {
+                    console.warn('⚠️ Erro ao buscar redes:', listResponse.status);
+                }
+                
+                // Mostrar modal
+                console.log('🪟 Tentando mostrar modal...');
+                showNetworkModal(existingNetworks);
+                
+            } catch (error) {
+                console.error('❌ Erro ao buscar redes:', error);
+                showNetworkModal([]);
+            }
+        }
+        
+        // Funções do Modal
+        function showNetworkModal(existingNetworks) {
+            console.log('🪟 showNetworkModal() chamada com', existingNetworks?.length || 0, 'redes');
+            
+            const modal = document.getElementById('networkModal');
+            if (!modal) {
+                console.error('❌ Elemento modal não encontrado!');
+                return;
+            }
+            
+            console.log('✅ Elemento modal encontrado:', modal);
+            
+            const existingNetworksList = document.getElementById('existingNetworksList');
+            if (!existingNetworksList) {
+                console.error('❌ Lista de redes não encontrada!');
+                return;
+            }
+            
+            // Limpar lista anterior
+            existingNetworksList.innerHTML = '';
+            
+            // Preencher lista de redes existentes
+            if (existingNetworks && existingNetworks.length > 0) {
+                console.log('📋 Preenchendo lista com', existingNetworks.length, 'redes');
+                existingNetworks.forEach(network => {
+                    const networkItem = document.createElement('div');
+                    networkItem.className = 'network-item';
+                    networkItem.dataset.networkId = network.id;
+                    
+                    networkItem.innerHTML = `
+                        <div class="network-item-name">${network.nome || network.id}</div>
+                        <div class="network-item-info">
+                            ${network.total_nodes || 0} nós • ${network.total_edges || 0} rotas
+                            ${network.created_at ? '• Criada: ' + new Date(network.created_at * 1000).toLocaleDateString() : ''}
+                        </div>
+                    `;
+                    
+                    networkItem.onclick = () => selectNetworkItem(networkItem);
+                    existingNetworksList.appendChild(networkItem);
+                });
+            } else {
+                console.log('📭 Nenhuma rede encontrada - mostrando mensagem vazia');
+                existingNetworksList.innerHTML = '<div style="text-align: center; color: #6b7280; padding: 20px;">Nenhuma rede encontrada</div>';
+            }
+            
+            // Resetar seleções
+            const createNewRadio = document.getElementById('createNew');
+            if (createNewRadio) {
+                createNewRadio.checked = true;
+                toggleNetworkOptions();
+            } else {
+                console.error('❌ Radio button createNew não encontrado!');
+            }
+            
+            // Mostrar modal
+            console.log('🎭 Definindo display do modal para block...');
+            modal.style.display = 'block';
+            
+            // Verificar se realmente ficou visível
+            setTimeout(() => {
+                const computedStyle = window.getComputedStyle(modal);
+                console.log('🔍 Estilo computado do modal - display:', computedStyle.display, 'visibility:', computedStyle.visibility);
+            }, 100);
+        }
+        
+        function closeModal() {
+            const modal = document.getElementById('networkModal');
+            modal.style.display = 'none';
+        }
+        
+        function toggleNetworkOptions() {
+            const useExisting = document.getElementById('useExisting').checked;
+            const existingSection = document.getElementById('existingNetworksSection');
+            const newSection = document.getElementById('newNetworkSection');
+            const confirmBtn = document.getElementById('confirmBtn');
+            
+            if (useExisting) {
+                existingSection.style.display = 'block';
+                newSection.style.display = 'none';
+                confirmBtn.textContent = 'Carregar Rede';
+                confirmBtn.className = 'btn btn-success';
+            } else {
+                existingSection.style.display = 'none';
+                newSection.style.display = 'block';
+                confirmBtn.textContent = 'Criar Rede';
+                confirmBtn.className = 'btn btn-primary';
+            }
+        }
+        
+        function selectNetworkItem(item) {
+            // Remover seleção anterior
+            document.querySelectorAll('.network-item').forEach(el => {
+                el.classList.remove('selected');
+            });
+            
+            // Selecionar item atual
+            item.classList.add('selected');
+        }
+        
+        async function confirmNetworkSelection() {
+            const useExisting = document.getElementById('useExisting').checked;
+            
+            if (useExisting) {
+                await loadExistingNetwork();
+            } else {
+                await createNewNetwork();
+            }
+        }
+        
+        async function loadExistingNetwork() {
+            const selectedItem = document.querySelector('.network-item.selected');
+            
+            if (!selectedItem) {
+                alert('Por favor, selecione uma rede para carregar.');
+                return;
+            }
+            
+            const networkId = selectedItem.dataset.networkId;
+            const networkName = selectedItem.querySelector('.network-item-name').textContent;
+            
+            try {
+                console.log('✓ Carregando rede existente:', networkName);
+                
+                currentNetworkId = networkId;
+                document.getElementById('networkId').textContent = networkName;
+                
+                await loadNetworkData(networkId);
+                closeModal();
+                
+                console.log('✅ Rede carregada com sucesso:', networkName);
+                
+            } catch (error) {
+                console.error('❌ Erro ao carregar rede:', error);
+                alert('Erro ao carregar a rede selecionada.');
+            }
+        }
+        
+        async function createNewNetwork() {
+            const networkName = document.getElementById('networkName').value.trim();
+            const numClients = parseInt(document.getElementById('numClients').value);
+            const numDeliverers = document.getElementById('numDeliverers').value.trim();
+            
+            // Validações
+            if (!networkName) {
+                alert('Por favor, insira um nome para a rede.');
+                return;
+            }
+            
+            if (isNaN(numClients) || numClients < 10 || numClients > 200) {
+                alert('O número de clientes deve estar entre 10 e 200.');
+                return;
+            }
+            
+            if (numDeliverers && (isNaN(parseInt(numDeliverers)) || parseInt(numDeliverers) < 1 || parseInt(numDeliverers) > 20)) {
+                alert('O número de entregadores deve estar entre 1 e 20.');
+                return;
+            }
+            
+            try {
+                console.log('🔄 Criando nova rede:', networkName);
+                
+                // Construir URL com parâmetros
+                let url = `/api/v1/rede/gerar-rede-maceio?num_clientes=${numClients}&nome_rede=${encodeURIComponent(networkName)}`;
+                if (numDeliverers) {
+                    url += `&num_entregadores=${parseInt(numDeliverers)}`;
+                }
+                
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    credentials: 'include'
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    console.log('📨 Resposta da API:', result);
+                    
+                    if (result.status === 'success' && result.data && result.data.rede_id) {
+                        currentNetworkId = result.data.rede_id;
+                        document.getElementById('networkId').textContent = networkName;
+                        
+                        await loadNetworkData(result.data.rede_id);
+                        closeModal();
+                        
+                        console.log('✅ Nova rede criada com sucesso:', networkName);
+                    } else {
+                        console.error('❌ Formato de resposta inesperado:', result);
+                        alert('Erro inesperado ao criar a rede.');
+                    }
+                } else {
+                    console.error('❌ Erro ao criar rede:', response.statusText);
+                    alert('Erro ao criar a rede. Tente novamente.');
+                }
+            } catch (error) {
+                console.error('❌ Erro ao criar rede:', error);
+                alert('Erro ao criar a rede. Verifique sua conexão.');
+            }
+        }
+        
+        // Iniciar rastreamento
+        function startTracking() {
+            if (!currentNetworkId) {
+                alert('Carregue ou gere uma rede primeiro clicando no botão "Carregar/Gerar Rede"!');
+                return;
+            }
+            
+            isTracking = true;
+            connectWebSocket(currentNetworkId);
+            
+            // Iniciar movimento dos veículos
+            fetch(`/api/v1/rede/${currentNetworkId}/start-movement`, {
+                method: 'POST',
+                headers: getAuthHeaders(),
+                credentials: 'include'
+            }).then(response => {
+                if (response.ok) {
+                    console.log('✓ Movimento de veículos iniciado');
+                }
+            });
+            
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+        }
+        
+        // Parar rastreamento
+        function stopTracking() {
+            isTracking = false;
+            
+            if (websocket) {
+                websocket.close();
+                websocket = null;
+            }
+            
+            // Parar movimento dos veículos
+            if (currentNetworkId) {
+                fetch(`/api/v1/rede/${currentNetworkId}/stop-movement`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    credentials: 'include'
+                });
+            }
+            
+            updateConnectionStatus(false);
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+        }
+        
+        // Função para autenticar com o sistema
+        async function authenticate() {
+            try {
+                console.log('🔐 Fazendo login...');
+                
+                const formData = new FormData();
+                formData.append('username', 'admin');
+                formData.append('password', 'secret');
+                
+                const response = await fetch('/api/v1/auth/login', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    console.log('✓ Login realizado com sucesso');
+                    
+                    // Armazenar o token para usar em requisições futuras
+                    accessToken = result.access_token;
+                    localStorage.setItem('accessToken', accessToken);
+                    console.log('🔑 Token armazenado:', accessToken.substring(0, 20) + '...');
+                    
+                    return true;
+                } else {
+                    console.error('❌ Erro no login:', response.statusText);
+                    return false;
+                }
+            } catch (error) {
+                console.error('❌ Erro na autenticação:', error);
+                return false;
+            }
+        }
+        
+        // Função auxiliar para fazer requisições autenticadas
+        function getAuthHeaders() {
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+            
+            if (accessToken) {
+                headers['Authorization'] = `Bearer ${accessToken}`;
+            }
+            
+            return headers;
+        }
+        
+        // Inicializar aplicação
+        document.addEventListener('DOMContentLoaded', async function() {
+            initMap();
+            
+            // Fazer login primeiro
+            const loginSuccess = await authenticate();
+            
+            if (loginSuccess) {
+                console.log('✓ Login realizado. Clique em "Carregar/Gerar Rede" para começar.');
+            } else {
+                console.log('❌ Não foi possível fazer login. Algumas funcionalidades podem não funcionar.');
+            }
+            
+            console.log('✓ Aplicação iniciada - aguardando interação do usuário');
+        });
+        
+        // Event listeners para o modal
+        window.addEventListener('click', function(event) {
+            const modal = document.getElementById('networkModal');
+            if (event.target === modal) {
+                closeModal();
+            }
+        });
+        
+        // Fechar modal com ESC
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                closeModal();
+            }
+        });
+        
+        // Limpar recursos ao fechar página
+        window.addEventListener('beforeunload', function() {
+            stopTracking();
+        });
+    </script>
+</body>
+</html>

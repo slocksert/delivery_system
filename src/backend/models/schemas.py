@@ -45,4 +45,15 @@ class NetworkInfoResponse(BaseModel):
     total_edges: int
     nodes_tipo: Dict[str, int]
     capacidade_total: int
-    nodes: List[Dict[str, str]]
+    nodes: List[Dict[str, Any]]
+    edges: List[Dict[str, Any]]
+
+class VehicleStatistics(BaseModel):
+    """Estatísticas de veículos."""
+    total_vehicles: int
+    active_vehicles: int
+    idle_vehicles: int
+    moving_vehicles: int
+    delivering_vehicles: int
+    returning_vehicles: int
+    total_routes: int

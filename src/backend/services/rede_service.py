@@ -3,11 +3,60 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from core.entities.models import RedeEntrega, Deposito, Hub, ZonaEntrega, Rota, Cliente, PrioridadeCliente, Veiculo, TipoVeiculo
+from core.entities.models import RedeEntrega, Deposito, Hub, ZonaEntrega, Rota, Cliente, PrioridadeCliente, Veiculo, TipoVeiculo, FluxoRota, ResultadoOtimizacao
 from core.generators.gerador_completo import GeradorMaceioCompleto
-from typing import List, Dict, Any, Optional
+from core.data.loader import construir_grafo_networkx_completo
+from core.algorithms.flow_algorithms import calculate_network_flow, FlowResult
+from typing import List, Dict, Any, Optional, Tuple, Union
 import time
+import math
+from datetime import datetime
+from dataclasses import dataclass, asdict
+try:
+    import osmnx as ox
+    import networkx as nx
+    OSMNX_AVAILABLE = True
+except ImportError:
+    ox = None
+    nx = None
+    OSMNX_AVAILABLE = False
+    print("OSMNX não disponível - funcionalidades de rota real limitadas")
+
 from ..database.sqlite import SQLiteDB
+
+# Estruturas de dados para WebSocket e rastreamento
+@dataclass
+class VehiclePosition:
+    """Posição atual de um veículo"""
+    vehicle_id: str
+    latitude: float
+    longitude: float
+    timestamp: datetime
+    speed: float = 0.0  # km/h
+    heading: float = 0.0  # graus (0-360)
+    status: str = "idle"  # idle, moving, delivering, returning
+
+@dataclass
+class RouteWaypoint:
+    """Waypoint individual de uma rota"""
+    latitude: float
+    longitude: float
+    sequence: int
+    estimated_time: float = 0.0  # minutos desde início da rota
+    is_stop: bool = False  # True se é parada (cliente, hub, etc.)
+    stop_id: Optional[str] = None  # ID do nó se for parada
+
+@dataclass  
+class DetailedRoute:
+    """Rota detalhada com waypoints para rastreamento"""
+    route_id: str
+    origin_id: str
+    destination_id: str
+    waypoints: List[RouteWaypoint]
+    total_distance: float  # km
+    estimated_duration: float  # minutos
+    traffic_factor: float = 1.0  # multiplicador de tráfego
+    optimized: bool = False
 
 class RedeService:
     def __init__(self, db: Optional[SQLiteDB] = None) -> None:
@@ -19,7 +68,40 @@ class RedeService:
             self.db = get_database()
         self.redes_cache: Dict[str, RedeEntrega] = {}
         self.metadata_cache: Dict[str, Dict[str, Any]] = {}
+        
+        # Cache para rastreamento de veículos e rotas detalhadas
+        self.vehicle_positions: Dict[str, VehiclePosition] = {}
+        self.detailed_routes: Dict[str, DetailedRoute] = {}
+        self.real_network_graph = None
+        
+        # Inicializar serviço de movimento de veículos
+        try:
+            from .vehicle_movement_service import VehicleMovementService
+            self.movement_service = VehicleMovementService(self)
+        except ImportError:
+            print("⚠️ VehicleMovementService não disponível")
+            self.movement_service = None
+        
         self._carregar_redes_do_banco()
+        self._inicializar_rede_real()
+
+    def _inicializar_rede_real(self):
+        """Inicializa o grafo real de Maceió para cálculos de rota"""
+        if OSMNX_AVAILABLE and ox is not None:
+            try:
+                print("Carregando rede real de Maceió para suporte a WebSocket...")
+                lugar = "Maceió, Alagoas, Brazil"
+                self.real_network_graph = ox.graph_from_place(
+                    lugar, 
+                    network_type='drive',
+                    simplify=True
+                )
+                self.real_network_graph = ox.add_edge_speeds(self.real_network_graph)
+                self.real_network_graph = ox.add_edge_travel_times(self.real_network_graph)
+                print(f"Rede real carregada: {len(self.real_network_graph.nodes)} nós, {len(self.real_network_graph.edges)} arestas")
+            except Exception as e:
+                print(f"Erro ao carregar rede real: {e}")
+                self.real_network_graph = None
 
     def _carregar_redes_do_banco(self):
         redes_list = self.db.listar_redes()
@@ -223,28 +305,109 @@ class RedeService:
         rede = self.redes_cache[rede_id]
         metadata = self.metadata_cache.get(rede_id, {})
         
+        # Inicializar posições de veículos se não existirem
+        self._inicializar_posicoes_veiculos(rede_id, rede)
+        
         todos_nos = []
         
         for deposito in rede.depositos:
             todos_nos.append({
                 "id": deposito.id,
-                "nome": deposito.nome,
-                "tipo": "deposito"
+                "name": deposito.nome,
+                "tipo": "deposito",
+                "type": "depot",  # Frontend expects 'type' field
+                "latitude": deposito.latitude,
+                "longitude": deposito.longitude,
+                "capacity": deposito.capacidade_maxima
             })
         
         for hub in rede.hubs:
             todos_nos.append({
                 "id": hub.id,
-                "nome": hub.nome,
-                "tipo": "hub"
+                "name": hub.nome,
+                "tipo": "hub",
+                "type": "hub",  # Frontend expects 'type' field
+                "latitude": hub.latitude,
+                "longitude": hub.longitude,
+                "capacity": hub.capacidade
+            })
+        
+        for cliente in rede.clientes:
+            todos_nos.append({
+                "id": cliente.id,
+                "name": f"Cliente {cliente.id}",
+                "tipo": "cliente",
+                "type": "client",  # Frontend expects 'type' field
+                "latitude": cliente.latitude,
+                "longitude": cliente.longitude,
+                "demand": cliente.demanda_media,
+                "priority": cliente.prioridade.name if hasattr(cliente.prioridade, 'name') else str(cliente.prioridade)
             })
         
         for zona in rede.zonas:
+            # For zones, we'll use a central point or the first hub's location
+            lat, lon = -9.65, -35.72  # Default to Maceió center
+            if zona.hubs:
+                lat = zona.hubs[0].latitude
+                lon = zona.hubs[0].longitude
+            
             todos_nos.append({
                 "id": zona.id,
-                "nome": zona.nome,
-                "tipo": "zona"
+                "name": zona.nome,
+                "tipo": "zona",
+                "type": "zone",  # Frontend expects 'type' field
+                "latitude": lat,
+                "longitude": lon
             })
+        
+        # Build edges/routes information
+        todas_rotas = []
+        for rota in rede.rotas:
+            todas_rotas.append({
+                "source": rota.origem,
+                "target": rota.destino,
+                "capacity": rota.capacidade,
+                "distance": getattr(rota, 'distancia', None),
+                "travel_time": getattr(rota, 'tempo_medio', None)
+            })
+        
+        # Obter informações dos veículos e suas posições
+        todos_veiculos = []
+        posicoes_veiculos = self.obter_todas_posicoes_veiculos(rede_id)
+        posicoes_map = {pos.vehicle_id: pos for pos in posicoes_veiculos}
+        
+        for veiculo in rede.veiculos:
+            veiculo_info = {
+                "id": veiculo.id,
+                "tipo": veiculo.tipo.name if hasattr(veiculo.tipo, 'name') else str(veiculo.tipo),
+                "capacidade": veiculo.capacidade,
+                "velocidade_media": veiculo.velocidade_media,
+                "hub_base": veiculo.hub_base,
+                "condutor": veiculo.condutor,
+                "disponivel": veiculo.disponivel
+            }
+            
+            # Adicionar posição atual se disponível
+            if veiculo.id in posicoes_map:
+                pos = posicoes_map[veiculo.id]
+                # Converter timestamp para string de forma segura
+                try:
+                    timestamp_str = pos.timestamp.isoformat() if hasattr(pos.timestamp, 'isoformat') else str(pos.timestamp)
+                except (AttributeError, TypeError):
+                    timestamp_str = datetime.now().isoformat()
+                
+                veiculo_info.update({
+                    "posicao_atual": {
+                        "latitude": pos.latitude,
+                        "longitude": pos.longitude,
+                        "timestamp": timestamp_str,
+                        "speed": pos.speed,
+                        "heading": pos.heading,
+                        "status": pos.status
+                    }
+                })
+            
+            todos_veiculos.append(veiculo_info)
         
         return {
             'nome': metadata.get('nome', 'Rede sem nome'),
@@ -252,15 +415,29 @@ class RedeService:
             'total_edges': len(rede.rotas),
             'nodes_por_tipo': self._contar_nodes_por_tipo(rede),
             'capacidade_total': sum(rota.capacidade for rota in rede.rotas),
-            'nodes': todos_nos
+            'nodes': todos_nos,
+            'edges': todas_rotas,
+            'vehicles': todos_veiculos
         }
     
     def preparar_para_calculo_fluxo(self, rede_id: str, origem: str, destino: str) -> Dict[str, Any]:
+        """
+        Calcula o fluxo máximo entre dois nós da rede usando algoritmos Ford-Fulkerson e Edmonds-Karp.
+        
+        Args:
+            rede_id: ID da rede
+            origem: Nó de origem para o cálculo de fluxo
+            destino: Nó de destino para o cálculo de fluxo
+            
+        Returns:
+            Dicionário com resultados dos algoritmos de fluxo máximo
+        """
         if rede_id not in self.redes_cache:
             raise ValueError("Rede não encontrada")
         
         rede = self.redes_cache[rede_id]
         
+        # Validar nós
         todos_ids = []
         todos_ids.extend([d.id for d in rede.depositos])
         todos_ids.extend([h.id for h in rede.hubs])
@@ -271,22 +448,148 @@ class RedeService:
         if destino not in todos_ids:
             raise ValueError(f"Nó destino '{destino}' não encontrado")
         
-        return {
-            'rede_preparada': True,
-            'origem': origem,
-            'destino': destino,
-            'grafo_info': {
-                'total_nodes': len(todos_ids),
-                'total_edges': len(rede.rotas),
-                'nodes_disponiveis': todos_ids
-            },
-            'status': 'Aguardando implementação do Dev 2 (Algoritmos de Fluxo)',
-            'proximos_passos': [
-                '1. Dev 2 implementar Ford-Fulkerson/Edmonds-Karp',
-                '2. Integrar algoritmos neste service',
-                '3. Retornar fluxo máximo calculado'
-            ]
-        }
+        # Construir grafo NetworkX
+        grafo = construir_grafo_networkx_completo(rede)
+        
+        if not grafo.has_node(origem) or not grafo.has_node(destino):
+            return {
+                'erro': 'Nós não encontrados no grafo',
+                'grafo_info': {
+                    'total_nodes': len(todos_ids),
+                    'total_edges': len(rede.rotas),
+                    'nodes_disponiveis': todos_ids
+                }
+            }
+        
+        try:
+            # Calcular fluxo máximo com ambos algoritmos
+            resultado_edmonds_karp = calculate_network_flow(
+                grafo, origem, destino, algorithm="edmonds_karp"
+            )
+            
+            resultado_ford_fulkerson = calculate_network_flow(
+                grafo, origem, destino, algorithm="ford_fulkerson"  
+            )
+            
+            # Converter FlowResult para ResultadoOtimizacao
+            resultado_ek = self._flow_result_to_resultado_otimizacao(resultado_edmonds_karp)
+            resultado_ff = self._flow_result_to_resultado_otimizacao(resultado_ford_fulkerson)
+            
+            # Construir fluxos por rota
+            fluxos_rotas_ek = self._construir_fluxos_rotas(resultado_edmonds_karp, rede)
+            fluxos_rotas_ff = self._construir_fluxos_rotas(resultado_ford_fulkerson, rede)
+            
+            return {
+                'status': 'sucesso',
+                'origem': origem,
+                'destino': destino,
+                'algoritmos': {
+                    'edmonds_karp': {
+                        'resultado': asdict(resultado_ek),
+                        'fluxos_rotas': [asdict(fr) for fr in fluxos_rotas_ek],
+                        'performance': {
+                            'tempo_execucao': resultado_edmonds_karp.execution_time,
+                            'valor_fluxo_maximo': resultado_edmonds_karp.max_flow_value,
+                            'caminhos_utilizados': len(resultado_edmonds_karp.paths_used),
+                            'arestas_corte_minimo': len(resultado_edmonds_karp.cut_edges)
+                        }
+                    },
+                    'ford_fulkerson': {
+                        'resultado': asdict(resultado_ff),
+                        'fluxos_rotas': [asdict(fr) for fr in fluxos_rotas_ff],
+                        'performance': {
+                            'tempo_execucao': resultado_ford_fulkerson.execution_time,
+                            'valor_fluxo_maximo': resultado_ford_fulkerson.max_flow_value,
+                            'caminhos_utilizados': len(resultado_ford_fulkerson.paths_used),
+                            'arestas_corte_minimo': len(resultado_ford_fulkerson.cut_edges)
+                        }
+                    }
+                },
+                'comparacao': {
+                    'valores_identicos': resultado_edmonds_karp.max_flow_value == resultado_ford_fulkerson.max_flow_value,
+                    'algoritmo_mais_rapido': 'edmonds_karp' if resultado_edmonds_karp.execution_time < resultado_ford_fulkerson.execution_time else 'ford_fulkerson',
+                    'diferenca_tempo': abs(resultado_edmonds_karp.execution_time - resultado_ford_fulkerson.execution_time)
+                },
+                'grafo_info': {
+                    'total_nodes': grafo.number_of_nodes(),
+                    'total_edges': grafo.number_of_edges(),
+                    'nodes_disponiveis': list(grafo.nodes()),
+                    'capacidade_total_rede': sum(rota.capacidade for rota in rede.rotas if rota.ativa)
+                },
+                'detalhes_caminhos': {
+                    'edmonds_karp': resultado_edmonds_karp.paths_used,
+                    'ford_fulkerson': resultado_ford_fulkerson.paths_used
+                },
+                'cortes_minimos': {
+                    'edmonds_karp': resultado_edmonds_karp.cut_edges,
+                    'ford_fulkerson': resultado_ford_fulkerson.cut_edges
+                }
+            }
+            
+        except Exception as e:
+            return {
+                'status': 'erro',
+                'origem': origem,
+                'destino': destino,
+                'erro': str(e),
+                'grafo_info': {
+                    'total_nodes': grafo.number_of_nodes(),
+                    'total_edges': grafo.number_of_edges(),
+                    'nodes_disponiveis': list(grafo.nodes())
+                }
+            }
+    
+    def _flow_result_to_resultado_otimizacao(self, flow_result: FlowResult) -> ResultadoOtimizacao:
+        """Converte FlowResult para ResultadoOtimizacao."""
+        # Encontrar o melhor caminho (maior fluxo)
+        melhor_caminho = []
+        if flow_result.paths_used:
+            # Se temos caminhos, pegar o primeiro (geralmente é um dos principais)
+            melhor_caminho = flow_result.paths_used[0]
+        
+        return ResultadoOtimizacao(
+            algoritmo=flow_result.algorithm_used,
+            fluxo_maximo=int(flow_result.max_flow_value),
+            caminho_otimo=melhor_caminho,
+            tempo_execucao=flow_result.execution_time,
+            iteracoes=len(flow_result.paths_used),
+            convergiu=True,
+            detalhes={
+                'fluxos_por_aresta': flow_result.flow_dict,
+                'arestas_corte_minimo': flow_result.cut_edges,
+                'total_caminhos_aumentantes': len(flow_result.paths_used),
+                'todos_caminhos': flow_result.paths_used
+            }
+        )
+    
+    def _construir_fluxos_rotas(self, flow_result: FlowResult, rede: RedeEntrega) -> List[FluxoRota]:
+        """Constrói lista de FluxoRota a partir do resultado do fluxo."""
+        fluxos_rotas = []
+        
+        # Mapear rotas da rede para facilitar busca
+        rotas_map = {}
+        for rota in rede.rotas:
+            key = f"{rota.origem}->{rota.destino}"
+            rotas_map[key] = rota
+        
+        # Criar FluxoRota para cada aresta com fluxo
+        for origem, destinos in flow_result.flow_dict.items():
+            for destino, fluxo in destinos.items():
+                if fluxo > 0:
+                    key = f"{origem}->{destino}"
+                    rota = rotas_map.get(key)
+                    
+                    if rota:
+                        fluxo_rota = FluxoRota(
+                            rota_id=f"{origem}_{destino}",
+                            origem=origem,
+                            destino=destino,
+                            fluxo_atual=int(fluxo),
+                            capacidade_maxima=rota.capacidade
+                        )
+                        fluxos_rotas.append(fluxo_rota)
+        
+        return fluxos_rotas
     
     def listar_redes(self) -> List[str]:
         return list(self.redes_cache.keys())
@@ -512,3 +815,949 @@ class RedeService:
             "nodes": nodes,
             "edges": edges
         }
+    
+    # Métodos para WebSocket e rastreamento de veículos
+    
+    def obter_posicao_veiculo(self, vehicle_id: str) -> Optional[VehiclePosition]:
+        """Obtém a posição atual de um veículo"""
+        return self.vehicle_positions.get(vehicle_id)
+    
+    def atualizar_posicao_veiculo(self, vehicle_id: str, latitude: float, longitude: float, 
+                                speed: float = 0.0, heading: float = 0.0, status: str = "moving") -> VehiclePosition:
+        """Atualiza a posição de um veículo"""
+        position = VehiclePosition(
+            vehicle_id=vehicle_id,
+            latitude=latitude,
+            longitude=longitude,
+            timestamp=datetime.now(),
+            speed=speed,
+            heading=heading,
+            status=status
+        )
+        self.vehicle_positions[vehicle_id] = position
+        return position
+    
+    def obter_todas_posicoes_veiculos(self, rede_id: Optional[str] = None) -> List[VehiclePosition]:
+        """Obtém todas as posições de veículos, opcionalmente filtradas por rede"""
+        positions = list(self.vehicle_positions.values())
+        
+        if rede_id and rede_id in self.redes_cache:
+            # Filtrar apenas veículos da rede especificada
+            rede = self.redes_cache[rede_id]
+            vehicle_ids = {v.id for v in rede.veiculos}
+            positions = [p for p in positions if p.vehicle_id in vehicle_ids]
+        
+        return positions
+    
+    def calcular_rota_detalhada(self, origin_lat: float, origin_lon: float, 
+                              dest_lat: float, dest_lon: float, 
+                              route_id: Optional[str] = None) -> Optional[DetailedRoute]:
+        """Calcula uma rota detalhada com waypoints usando a rede real"""
+        if not OSMNX_AVAILABLE or self.real_network_graph is None or ox is None:
+            return self._calcular_rota_sintetica(origin_lat, origin_lon, dest_lat, dest_lon, route_id)
+        
+        try:
+            # Encontrar nós mais próximos
+            origin_node = ox.nearest_nodes(self.real_network_graph, origin_lon, origin_lat)
+            dest_node = ox.nearest_nodes(self.real_network_graph, dest_lon, dest_lat)
+            
+            if nx is None:
+                return self._calcular_rota_sintetica(origin_lat, origin_lon, dest_lat, dest_lon, route_id)
+            
+            # Calcular caminho mais curto
+            path = nx.shortest_path(self.real_network_graph, origin_node, dest_node, weight='travel_time')
+            
+            # Extrair waypoints
+            waypoints = []
+            total_distance = 0.0
+            total_time = 0.0
+            
+            for i, node in enumerate(path):
+                node_data = self.real_network_graph.nodes[node]
+                waypoint = RouteWaypoint(
+                    latitude=node_data['y'],
+                    longitude=node_data['x'],
+                    sequence=i,
+                    estimated_time=total_time,
+                    is_stop=i == 0 or i == len(path) - 1
+                )
+                waypoints.append(waypoint)
+                
+                # Calcular distância e tempo para próximo nó
+                if i < len(path) - 1:
+                    next_node = path[i + 1]
+                    if self.real_network_graph.has_edge(node, next_node):
+                        edge_data = self.real_network_graph[node][next_node][0]
+                        total_distance += edge_data.get('length', 0) / 1000  # converter para km
+                        total_time += edge_data.get('travel_time', 0) / 60  # converter para minutos
+            
+            detailed_route = DetailedRoute(
+                route_id=route_id or f"route_{int(time.time())}",
+                origin_id=f"coord_{origin_lat}_{origin_lon}",
+                destination_id=f"coord_{dest_lat}_{dest_lon}",
+                waypoints=waypoints,
+                total_distance=total_distance,
+                estimated_duration=total_time,
+                optimized=True
+            )
+            
+            if route_id:
+                self.detailed_routes[route_id] = detailed_route
+            
+            return detailed_route
+            
+        except Exception as e:
+            print(f"Erro ao calcular rota real: {e}")
+            return self._calcular_rota_sintetica(origin_lat, origin_lon, dest_lat, dest_lon, route_id)
+    
+    def _calcular_rota_sintetica(self, origin_lat: float, origin_lon: float, 
+                               dest_lat: float, dest_lon: float, route_id: Optional[str] = None) -> DetailedRoute:
+        """Calcula uma rota sintética simples como fallback"""
+        # Rota direta com interpolação linear
+        num_waypoints = 10
+        waypoints = []
+        
+        lat_step = (dest_lat - origin_lat) / (num_waypoints - 1)
+        lon_step = (dest_lon - origin_lon) / (num_waypoints - 1)
+        
+        # Calcular distância total (aproximada)
+        distance_km = self._calcular_distancia_haversine(origin_lat, origin_lon, dest_lat, dest_lon)
+        estimated_speed = 25  # km/h velocidade média urbana
+        total_time = (distance_km / estimated_speed) * 60  # minutos
+        
+        for i in range(num_waypoints):
+            lat = origin_lat + (lat_step * i)
+            lon = origin_lon + (lon_step * i)
+            
+            waypoint = RouteWaypoint(
+                latitude=lat,
+                longitude=lon,
+                sequence=i,
+                estimated_time=(total_time / (num_waypoints - 1)) * i,
+                is_stop=i == 0 or i == num_waypoints - 1
+            )
+            waypoints.append(waypoint)
+        
+        detailed_route = DetailedRoute(
+            route_id=route_id or f"synthetic_route_{int(time.time())}",
+            origin_id=f"coord_{origin_lat}_{origin_lon}",
+            destination_id=f"coord_{dest_lat}_{dest_lon}",
+            waypoints=waypoints,
+            total_distance=distance_km,
+            estimated_duration=total_time,
+            optimized=False
+        )
+        
+        if route_id:
+            self.detailed_routes[route_id] = detailed_route
+        
+        return detailed_route
+    
+    def _calcular_distancia_haversine(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Calcula distância usando fórmula de Haversine"""
+        R = 6371  # Raio da Terra em km
+        
+        lat1_rad = math.radians(lat1)
+        lat2_rad = math.radians(lat2)
+        delta_lat = math.radians(lat2 - lat1)
+        delta_lon = math.radians(lon2 - lon1)
+        
+        a = (math.sin(delta_lat / 2) ** 2 + 
+             math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lon / 2) ** 2)
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        
+        return R * c
+    
+    def obter_rota_detalhada(self, route_id: str) -> Optional[DetailedRoute]:
+        """Obtém uma rota detalhada pelo ID"""
+        return self.detailed_routes.get(route_id)
+    
+    def calcular_rota_entre_nos(self, rede_id: str, origin_id: str, dest_id: str) -> Optional[DetailedRoute]:
+        """Calcula rota detalhada entre dois nós da rede"""
+        if rede_id not in self.redes_cache:
+            return None
+        
+        rede = self.redes_cache[rede_id]
+        
+        # Encontrar coordenadas dos nós
+        origin_coords = self._obter_coordenadas_no(rede, origin_id)
+        dest_coords = self._obter_coordenadas_no(rede, dest_id)
+        
+        if not origin_coords or not dest_coords:
+            return None
+        
+        route_id = f"{origin_id}_{dest_id}_{int(time.time())}"
+        return self.calcular_rota_detalhada(
+            origin_coords[0], origin_coords[1],
+            dest_coords[0], dest_coords[1],
+            route_id
+        )
+    
+    def _obter_coordenadas_no(self, rede: RedeEntrega, node_id: str) -> Optional[Tuple[float, float]]:
+        """Obtém coordenadas de um nó da rede"""
+        # Verificar depósitos
+        for deposito in rede.depositos:
+            if deposito.id == node_id:
+                return (deposito.latitude, deposito.longitude)
+        
+        # Verificar hubs
+        for hub in rede.hubs:
+            if hub.id == node_id:
+                return (hub.latitude, hub.longitude)
+        
+        # Verificar clientes
+        for cliente in rede.clientes:
+            if cliente.id == node_id:
+                return (cliente.latitude, cliente.longitude)
+        
+        return None
+    
+    def obter_rotas_otimizadas_para_veiculo(self, rede_id: str, vehicle_id: str, 
+                                          clientes_ids: List[str]) -> List[DetailedRoute]:
+        """Gera rotas otimizadas para um veículo visitar múltiplos clientes"""
+        if rede_id not in self.redes_cache:
+            return []
+        
+        rede = self.redes_cache[rede_id]
+        
+        # Encontrar veículo
+        veiculo = None
+        for v in rede.veiculos:
+            if v.id == vehicle_id:
+                veiculo = v
+                break
+        
+        if not veiculo:
+            return []
+        
+        # Encontrar hub base
+        hub_coords = None
+        for hub in rede.hubs:
+            if hub.id == veiculo.hub_base:
+                hub_coords = (hub.latitude, hub.longitude)
+                break
+        
+        if not hub_coords:
+            return []
+        
+        # Otimização simples: ordenar clientes por distância do hub
+        clientes_coords = []
+        for cliente_id in clientes_ids:
+            coords = self._obter_coordenadas_no(rede, cliente_id)
+            if coords:
+                dist = self._calcular_distancia_haversine(hub_coords[0], hub_coords[1], coords[0], coords[1])
+                clientes_coords.append((cliente_id, coords, dist))
+        
+        # Ordenar por distância
+        clientes_coords.sort(key=lambda x: x[2])
+        
+        # Gerar rotas sequenciais
+        rotas = []
+        current_coords = hub_coords
+        current_id = veiculo.hub_base
+        
+        for i, (cliente_id, cliente_coords, _) in enumerate(clientes_coords):
+            route_id = f"{vehicle_id}_route_{i+1}"
+            rota = self.calcular_rota_detalhada(
+                current_coords[0], current_coords[1],
+                cliente_coords[0], cliente_coords[1],
+                route_id
+            )
+            if rota:
+                rota.origin_id = current_id
+                rota.destination_id = cliente_id
+                rotas.append(rota)
+            
+            current_coords = cliente_coords
+            current_id = cliente_id
+        
+        # Rota de volta ao hub
+        if clientes_coords:
+            route_id = f"{vehicle_id}_return"
+            rota_volta = self.calcular_rota_detalhada(
+                current_coords[0], current_coords[1],
+                hub_coords[0], hub_coords[1],
+                route_id
+            )
+            if rota_volta:
+                rota_volta.origin_id = current_id
+                rota_volta.destination_id = veiculo.hub_base
+                rotas.append(rota_volta)
+        
+        return rotas
+    
+    # Métodos para análise de tráfego e otimização
+    
+    def aplicar_fator_trafego(self, route_id: str, traffic_factor: float) -> bool:
+        """Aplica fator de tráfego a uma rota (1.0 = normal, >1.0 = congestionamento)"""
+        if route_id in self.detailed_routes:
+            route = self.detailed_routes[route_id]
+            route.traffic_factor = traffic_factor
+            route.estimated_duration = route.estimated_duration * traffic_factor
+            return True
+        return False
+    
+    def obter_estatisticas_tempo_real(self, rede_id: str) -> Dict[str, Any]:
+        """Obtém estatísticas da rede em tempo real"""
+        if rede_id not in self.redes_cache:
+            return {}
+        
+        rede = self.redes_cache[rede_id]
+        positions = self.obter_todas_posicoes_veiculos(rede_id)
+        
+        # Obter estatísticas do serviço de movimento se disponível
+        movement_stats = {}
+        if self.movement_service:
+            movement_stats = self.movement_service.get_movement_statistics()
+        
+        # Estatísticas de veículos (usar dados do movement service quando disponível)
+        veiculos_ativos = movement_stats.get('active_vehicles', 
+                                           len([p for p in positions if p.status in ["moving", "delivering", "returning"]]))
+        veiculos_idle = movement_stats.get('idle', 
+                                         len([p for p in positions if p.status == "idle"]))
+        velocidade_media = sum(p.speed for p in positions) / len(positions) if positions else 0
+        
+        # Estatísticas de rotas
+        rotas_ativas = movement_stats.get('total_routes', 
+                                        len([r for r in self.detailed_routes.values() 
+                                           if any(r.route_id.startswith(v.id) for v in rede.veiculos)]))
+        
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "rede_id": rede_id,
+            "veiculos": {
+                "total": len(rede.veiculos),
+                "ativos": veiculos_ativos,
+                "idle": veiculos_idle,
+                "velocidade_media": round(velocidade_media, 2)
+            },
+            "rotas": {
+                "ativas": rotas_ativas,
+                "em_cache": len(self.detailed_routes)
+            },
+            "cobertura": {
+                "total_clientes": len(rede.clientes),
+                "total_hubs": len(rede.hubs),
+                "total_zonas": len(rede.zonas)
+            }
+        }
+    
+    def simular_movimento_veiculo(self, vehicle_id: str, route_id: str, 
+                                progress_percent: float) -> Optional[VehiclePosition]:
+        """Simula movimento de veículo ao longo de uma rota"""
+        if route_id not in self.detailed_routes:
+            return None
+        
+        route = self.detailed_routes[route_id]
+        if not route.waypoints:
+            return None
+        
+        # Garantir que progress está entre 0 e 100
+        progress_percent = max(0, min(100, progress_percent))
+        
+        # Calcular posição interpolada
+        total_waypoints = len(route.waypoints) - 1
+        if total_waypoints == 0:
+            waypoint = route.waypoints[0]
+            # Velocidade variável baseada no contexto
+            import random
+            speed = random.uniform(15.0, 70.0) if progress_percent < 100 else 0.0
+            return self.atualizar_posicao_veiculo(
+                vehicle_id, waypoint.latitude, waypoint.longitude, 
+                speed, 0.0, "moving" if progress_percent < 100 else "idle"
+            )
+        
+        # Encontrar waypoints para interpolação
+        position_index = (progress_percent / 100.0) * total_waypoints
+        waypoint1_idx = int(position_index)
+        waypoint2_idx = min(waypoint1_idx + 1, total_waypoints)
+        
+        waypoint1 = route.waypoints[waypoint1_idx]
+        waypoint2 = route.waypoints[waypoint2_idx]
+        
+        # Interpolação linear
+        if waypoint1_idx == waypoint2_idx:
+            lat = waypoint1.latitude
+            lon = waypoint1.longitude
+        else:
+            t = position_index - waypoint1_idx
+            lat = waypoint1.latitude + t * (waypoint2.latitude - waypoint1.latitude)
+            lon = waypoint1.longitude + t * (waypoint2.longitude - waypoint1.longitude)
+        
+        # Calcular heading (direção)
+        heading = self._calcular_heading(waypoint1.latitude, waypoint1.longitude,
+                                       waypoint2.latitude, waypoint2.longitude)
+        
+        # Estimar velocidade baseada no tipo de via, tráfego e variação realística
+        import random
+        base_speed = random.uniform(20.0, 40.0)  # Velocidade base variável
+        traffic_adjustment = (2.0 - route.traffic_factor)  # Ajuste por tráfego
+        estimated_speed = base_speed * traffic_adjustment
+        
+        # Limitar velocidade entre valores razoáveis
+        estimated_speed = max(5.0, min(60.0, estimated_speed))
+        
+        status = "moving"
+        if progress_percent >= 100:
+            status = "idle"
+        elif waypoint2.is_stop and abs(position_index - waypoint2_idx) < 0.1:
+            status = "delivering"
+        
+        return self.atualizar_posicao_veiculo(
+            vehicle_id, lat, lon, estimated_speed, heading, status
+        )
+    
+    def _calcular_heading(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Calcula o heading (direção) entre dois pontos em graus (0-360)"""
+        if lat1 == lat2 and lon1 == lon2:
+            return 0.0
+            
+        # Converter para radianos
+        lat1_rad = math.radians(lat1)
+        lat2_rad = math.radians(lat2)
+        dlon_rad = math.radians(lon2 - lon1)
+        
+        # Calcular heading usando fórmula de bearing
+        y = math.sin(dlon_rad) * math.cos(lat2_rad)
+        x = math.cos(lat1_rad) * math.sin(lat2_rad) - math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(dlon_rad)
+        
+        heading_rad = math.atan2(y, x)
+        heading_deg = math.degrees(heading_rad)
+        
+        # Normalizar para 0-360 graus
+        return (heading_deg + 360) % 360
+    
+    def obter_dados_websocket(self, rede_id: str) -> Dict[str, Any]:
+        """Obtém todos os dados necessários para WebSocket em formato JSON serializável"""
+        estatisticas = self.obter_estatisticas_tempo_real(rede_id)
+        posicoes = self.obter_todas_posicoes_veiculos(rede_id)
+        
+        # Converter posições para formato serializável
+        posicoes_json = []
+        for pos in posicoes:
+            # Converter timestamp para string de forma segura
+            try:
+                timestamp_str = pos.timestamp.isoformat() if hasattr(pos.timestamp, 'isoformat') else str(pos.timestamp)
+            except (AttributeError, TypeError):
+                timestamp_str = datetime.now().isoformat()
+                
+            posicoes_json.append({
+                "vehicle_id": pos.vehicle_id,
+                "latitude": pos.latitude,
+                "longitude": pos.longitude,
+                "timestamp": timestamp_str,
+                "speed": pos.speed,
+                "heading": pos.heading,
+                "status": pos.status
+            })
+        
+        # Obter rotas ativas
+        rotas_ativas = []
+        if rede_id in self.redes_cache:
+            rede = self.redes_cache[rede_id]
+            vehicle_ids = {v.id for v in rede.veiculos}
+            
+            for route_id, route in self.detailed_routes.items():
+                # Verificar se a rota pertence a um veículo desta rede
+                if any(route_id.startswith(vid) for vid in vehicle_ids):
+                    waypoints_json = []
+                    for wp in route.waypoints:
+                        waypoints_json.append({
+                            "latitude": wp.latitude,
+                            "longitude": wp.longitude,
+                            "sequence": wp.sequence,
+                            "estimated_time": wp.estimated_time,
+                            "is_stop": wp.is_stop,
+                            "stop_id": wp.stop_id
+                        })
+                    
+                    rotas_ativas.append({
+                        "route_id": route.route_id,
+                        "origin_id": route.origin_id,
+                        "destination_id": route.destination_id,
+                        "waypoints": waypoints_json,
+                        "total_distance": route.total_distance,
+                        "estimated_duration": route.estimated_duration,
+                        "traffic_factor": route.traffic_factor,
+                        "optimized": route.optimized
+                    })
+        
+        return {
+            "type": "network_update",
+            "rede_id": rede_id,
+            "timestamp": datetime.now().isoformat(),
+            "estatisticas": estatisticas,
+            "posicoes_veiculos": posicoes_json,
+            "rotas_ativas": rotas_ativas
+        }
+    
+    def limpar_dados_antigos(self, max_age_minutes: int = 60):
+        """Remove dados antigos de posições e rotas"""
+        current_time = datetime.now()
+        
+        # Limpar posições antigas
+        old_positions = []
+        for vehicle_id, position in self.vehicle_positions.items():
+            age_minutes = (current_time - position.timestamp).total_seconds() / 60
+            if age_minutes > max_age_minutes:
+                old_positions.append(vehicle_id)
+        
+        for vehicle_id in old_positions:
+            del self.vehicle_positions[vehicle_id]
+        
+        print(f"Limpeza automática: removidas {len(old_positions)} posições antigas")
+    
+    # Métodos para demonstração e simulação
+    def simular_rastreamento_veiculo(self, vehicle_id: str, route_id: str) -> List[VehiclePosition]:
+        """Simula o movimento de um veículo ao longo de uma rota para demonstração"""
+        if route_id not in self.detailed_routes:
+            raise ValueError(f"Rota detalhada {route_id} não encontrada")
+        
+        route = self.detailed_routes[route_id]
+        positions = []
+        
+        # Simular posições ao longo dos waypoints
+        current_time = datetime.now()
+        import random
+        for i, waypoint in enumerate(route.waypoints):
+            # Velocidade realística variável
+            base_speed = random.uniform(15.0, 45.0)
+            speed_variation = random.uniform(-5.0, 10.0)
+            current_speed = max(5.0, min(60.0, base_speed + speed_variation))
+            
+            position = VehiclePosition(
+                vehicle_id=vehicle_id,
+                latitude=waypoint.latitude,
+                longitude=waypoint.longitude,
+                timestamp=current_time,
+                speed=current_speed,
+                heading=self._calcular_heading(
+                    waypoint.latitude, waypoint.longitude,
+                    route.waypoints[i+1].latitude if i+1 < len(route.waypoints) else waypoint.latitude,
+                    route.waypoints[i+1].longitude if i+1 < len(route.waypoints) else waypoint.longitude
+                ),
+                status="moving" if i < len(route.waypoints)-1 else "delivering"
+            )
+            positions.append(position)
+            
+            # Atualizar cache de posição atual
+            self.vehicle_positions[vehicle_id] = position
+            
+            # Simular tempo de viagem
+            current_time = datetime.fromtimestamp(current_time.timestamp() + waypoint.estimated_time * 60)
+        
+        return positions
+    
+    def obter_estatisticas_trafego(self, zona_id: Optional[str] = None) -> Dict[str, Any]:
+        """Obtém estatísticas de tráfego e fluxo da rede"""
+        stats = {
+            "total_vehicles": len(self.vehicle_positions),
+            "active_routes": len(self.detailed_routes),
+            "average_speed": 0.0,
+            "traffic_density": 0.0,
+            "congested_areas": []
+        }
+        
+        if self.vehicle_positions:
+            speeds = [pos.speed for pos in self.vehicle_positions.values()]
+            stats["average_speed"] = sum(speeds) / len(speeds)
+            
+            # Identificar áreas congestionadas (velocidade < 15 km/h)
+            for vehicle_id, position in self.vehicle_positions.items():
+                if position.speed < 15.0:
+                    stats["congested_areas"].append({
+                        "vehicle_id": vehicle_id,
+                        "location": [position.latitude, position.longitude],
+                        "speed": position.speed
+                    })
+        
+        # Calcular densidade de tráfego baseada no número de veículos ativos
+        if self.real_network_graph:
+            network_area = len(self.real_network_graph.nodes) / 1000  # Normalizar
+            stats["traffic_density"] = len(self.vehicle_positions) / network_area
+        
+        return stats
+    
+    def gerar_relatorio_otimizacao(self, rede_id: str) -> Dict[str, Any]:
+        """Gera relatório de otimização baseado em dados reais da rede"""
+        if rede_id not in self.redes_cache:
+            raise ValueError("Rede não encontrada")
+        
+        rede = self.redes_cache[rede_id]
+        stats_trafego = self.obter_estatisticas_trafego()
+        
+        relatorio = {
+            "rede_id": rede_id,
+            "timestamp": datetime.now().isoformat(),
+            "resumo_rede": {
+                "depositos": len(rede.depositos),
+                "hubs": len(rede.hubs),
+                "clientes": len(rede.clientes),
+                "veiculos": len(rede.veiculos),
+                "rotas": len(rede.rotas)
+            },
+            "performance_atual": stats_trafego,
+            "gargalos_identificados": [],
+            "sugestoes_otimizacao": []
+        }
+        
+        # Identificar gargalos baseado em capacidade vs demanda
+        for rota in rede.rotas:
+            if rota.capacidade < 30:  # Capacidade baixa
+                relatorio["gargalos_identificados"].append({
+                    "tipo": "capacidade_baixa",
+                    "rota": f"{rota.origem} -> {rota.destino}",
+                    "capacidade_atual": rota.capacidade,
+                    "sugestao": "Aumentar frota ou otimizar rota"
+                })
+        
+        # Sugestões de otimização
+        if stats_trafego["average_speed"] < 20:
+            relatorio["sugestoes_otimizacao"].append({
+                "prioridade": "alta",
+                "tipo": "roteamento",
+                "descricao": "Implementar roteamento dinâmico baseado em tráfego real",
+                "impacto_estimado": "15-25% melhoria no tempo de entrega"
+            })
+        
+        if len(stats_trafego["congested_areas"]) > 3:
+            relatorio["sugestoes_otimizacao"].append({
+                "prioridade": "média", 
+                "tipo": "redistribuicao",
+                "descricao": "Redistribuir veículos para evitar áreas congestionadas",
+                "impacto_estimado": "10-20% redução no tempo de entrega"
+            })
+        
+        return relatorio
+    
+    def exportar_dados_websocket(self, rede_id: str) -> Dict[str, Any]:
+        """Exporta todos os dados necessários para o serviço WebSocket"""
+        if rede_id not in self.redes_cache:
+            raise ValueError("Rede não encontrada")
+        
+        rede = self.redes_cache[rede_id]
+        
+        # Preparar dados no formato adequado para WebSocket
+        websocket_data = {
+            "network_info": {
+                "id": rede_id,
+                "nodes": [],
+                "edges": [],
+                "bounds": self._obter_limites_rede(rede)
+            },
+            "vehicles": [],
+            "routes": [],
+            "real_time_data": {
+                "traffic_stats": self.obter_estatisticas_trafego(),
+                "last_update": datetime.now().isoformat()
+            }
+        }
+        
+        # Converter posições de veículos para formato JSON serializável
+        for pos in self.vehicle_positions.values():
+            try:
+                timestamp_str = pos.timestamp.isoformat() if hasattr(pos.timestamp, 'isoformat') else str(pos.timestamp)
+            except (AttributeError, TypeError):
+                timestamp_str = datetime.now().isoformat()
+                
+            websocket_data["vehicles"].append({
+                "vehicle_id": pos.vehicle_id,
+                "latitude": pos.latitude,
+                "longitude": pos.longitude,
+                "timestamp": timestamp_str,
+                "speed": pos.speed,
+                "heading": pos.heading,
+                "status": pos.status
+            })
+        
+        # Converter rotas para formato JSON serializável
+        for route in self.detailed_routes.values():
+            route_dict = asdict(route)
+            # Converter waypoints se necessário
+            if 'waypoints' in route_dict:
+                for wp in route_dict['waypoints']:
+                    # Garantir que todos os campos são serializáveis
+                    pass
+            websocket_data["routes"].append(route_dict)
+        
+        # Adicionar nós (depósitos, hubs, clientes)
+        for deposito in rede.depositos:
+            websocket_data["network_info"]["nodes"].append({
+                "id": deposito.id,
+                "type": "depot",
+                "coordinates": [deposito.latitude, deposito.longitude],
+                "name": deposito.nome,
+                "capacity": deposito.capacidade_maxima
+            })
+        
+        for hub in rede.hubs:
+            websocket_data["network_info"]["nodes"].append({
+                "id": hub.id,
+                "type": "hub", 
+                "coordinates": [hub.latitude, hub.longitude],
+                "name": hub.nome,
+                "capacity": hub.capacidade
+            })
+        
+        for cliente in rede.clientes:
+            websocket_data["network_info"]["nodes"].append({
+                "id": cliente.id,
+                "type": "client",
+                "coordinates": [cliente.latitude, cliente.longitude],
+                "demand": cliente.demanda_media,
+                "priority": cliente.prioridade.value if hasattr(cliente.prioridade, 'value') else str(cliente.prioridade)
+            })
+        
+        # Adicionar arestas (rotas)
+        for rota in rede.rotas:
+            websocket_data["network_info"]["edges"].append({
+                "id": f"{rota.origem}_{rota.destino}",
+                "source": rota.origem,
+                "target": rota.destino,
+                "capacity": rota.capacidade,
+                "distance": rota.peso,
+                "travel_time": rota.tempo_medio,
+                "active": rota.ativa
+            })
+        
+        return websocket_data
+    
+    def _obter_limites_rede(self, rede: RedeEntrega) -> Dict[str, float]:
+        """Calcula os limites geográficos da rede para visualização"""
+        all_lats = []
+        all_lons = []
+        
+        for deposito in rede.depositos:
+            all_lats.append(deposito.latitude)
+            all_lons.append(deposito.longitude)
+        
+        for hub in rede.hubs:
+            all_lats.append(hub.latitude)
+            all_lons.append(hub.longitude)
+            
+        for cliente in rede.clientes:
+            all_lats.append(cliente.latitude)
+            all_lons.append(cliente.longitude)
+        
+        if all_lats and all_lons:
+            return {
+                "min_lat": min(all_lats),
+                "max_lat": max(all_lats),
+                "min_lon": min(all_lons),
+                "max_lon": max(all_lons)
+            }
+        
+        # Retornar limites padrão de Maceió se não houver dados
+        return {
+            "min_lat": -9.75,
+            "max_lat": -9.50,
+            "min_lon": -35.85,
+            "max_lon": -35.65
+        }
+    
+    def _inicializar_posicoes_veiculos(self, rede_id: str, rede: RedeEntrega):
+        """Inicializa posições de veículos nos seus hubs base e cria algumas rotas ativas"""
+        import random
+        from datetime import datetime, timedelta
+        
+        # Verificar se já temos posições para esta rede
+        existing_positions = self.obter_todas_posicoes_veiculos(rede_id)
+        if existing_positions:
+            return  # Já inicializado
+        
+        print(f"🚗 Inicializando posições de {len(rede.veiculos)} veículos para rede {rede_id}...")
+        
+        # Inicializar posições dos veículos nos seus hubs base
+        for veiculo in rede.veiculos:
+            # Encontrar o hub base
+            hub_base = None
+            for hub in rede.hubs:
+                if hub.id == veiculo.hub_base:
+                    hub_base = hub
+                    break
+            
+            if hub_base:
+                # Adicionar pequena variação aleatória para simular veículos próximos mas não exatamente no mesmo local
+                lat_variation = random.uniform(-0.001, 0.001)  # ~100m de variação
+                lon_variation = random.uniform(-0.001, 0.001)
+                
+                # Status aleatório para simular operação
+                statuses = ["idle", "moving", "delivering"]
+                weights = [60, 30, 10]  # Mais veículos idle
+                status = random.choices(statuses, weights=weights, k=1)[0]
+                
+                # Velocidade baseada no status
+                if status == "idle":
+                    speed = 0
+                elif status == "moving":
+                    speed = random.uniform(15, 35)
+                else:  # delivering
+                    speed = random.uniform(5, 15)
+                
+                # Direção aleatória
+                heading = random.uniform(0, 360)
+                
+                # Criar posição inicial
+                self.atualizar_posicao_veiculo(
+                    vehicle_id=veiculo.id,
+                    latitude=hub_base.latitude + lat_variation,
+                    longitude=hub_base.longitude + lon_variation,
+                    speed=speed,
+                    heading=heading,
+                    status=status
+                )
+        
+        # Criar algumas rotas ativas para veículos "moving" ou "delivering"
+        self._criar_rotas_ativas_demo(rede_id, rede)
+        
+        print(f"✅ Inicializadas {len(rede.veiculos)} posições de veículos para rede {rede_id}")
+        
+        # Iniciar movimento automático se serviço disponível (de forma assíncrona)
+        if self.movement_service:
+            try:
+                import asyncio
+                # Criar task para executar em background
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.create_task(self._start_movement_delayed(rede_id))
+                print(f"🚀 Agendado início do movimento automático para rede {rede_id}")
+            except Exception as e:
+                print(f"⚠️ Erro ao agendar movimento automático: {e}")
+    
+    async def _start_movement_delayed(self, rede_id: str):
+        """Inicia movimento com delay para evitar problemas de sincronização"""
+        import asyncio
+        try:
+            await asyncio.sleep(1)  # Pequeno delay
+            if self.movement_service:
+                await self.movement_service.start_automatic_movement(rede_id)
+                print(f"🚀 Movimento automático iniciado para rede {rede_id}")
+        except Exception as e:
+            print(f"⚠️ Erro ao iniciar movimento automático: {e}")
+    
+    def _criar_rotas_ativas_demo(self, rede_id: str, rede: RedeEntrega):
+        """Cria algumas rotas ativas de demonstração"""
+        import random
+        
+        # Pegar alguns veículos que estão "moving" ou "delivering"
+        veiculos_ativos = []
+        for veiculo in rede.veiculos:
+            position = self.obter_posicao_veiculo(veiculo.id)
+            if position and position.status in ["moving", "delivering"]:
+                veiculos_ativos.append(veiculo)
+        
+        # Limitar a 3-5 veículos ativos para demonstração
+        veiculos_ativos = veiculos_ativos[:random.randint(3, min(5, len(veiculos_ativos)))]
+        
+        for veiculo in veiculos_ativos:
+            # Encontrar hub base
+            hub_base = None
+            for hub in rede.hubs:
+                if hub.id == veiculo.hub_base:
+                    hub_base = hub
+                    break
+            
+            if not hub_base:
+                continue
+            
+            # Selecionar alguns clientes aleatórios para criar rota
+            clientes_disponiveis = random.sample(rede.clientes, min(3, len(rede.clientes)))
+            cliente_ids = [c.id for c in clientes_disponiveis]
+            
+            # Gerar rotas otimizadas para este veículo
+            rotas = self.obter_rotas_otimizadas_para_veiculo(rede_id, veiculo.id, cliente_ids)
+            
+            if rotas:
+                print(f"🛣️ Criadas {len(rotas)} rotas ativas para veículo {veiculo.id}")
+                
+                # Simular progresso aleatório na primeira rota
+                primeira_rota = rotas[0]
+                progresso = random.uniform(10, 80)  # 10% a 80% completo
+                
+                # Atualizar posição do veículo baseado no progresso da rota
+                new_position = self.simular_movimento_veiculo(
+                    veiculo.id, 
+                    primeira_rota.route_id, 
+                    progresso
+                )
+                
+                if new_position:
+                    print(f"📍 Veículo {veiculo.id} posicionado em {progresso:.1f}% da rota {primeira_rota.route_id}")
+    
+    # Métodos de integração com VehicleMovementService
+    
+    def start_vehicle_movement(self, rede_id: Optional[str] = None) -> bool:
+        """Inicia o movimento automático de veículos"""
+        if not self.movement_service:
+            return False
+        
+        try:
+            # Se rede_id não especificado, usar primeira rede disponível
+            if not rede_id and self.redes_cache:
+                rede_id = list(self.redes_cache.keys())[0]
+            
+            if not rede_id:
+                return False
+            
+            # Iniciar movimento assíncrono
+            import asyncio
+            try:
+                # Tentar obter loop existente
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Loop já rodando - criar task
+                    loop.create_task(self.movement_service.start_automatic_movement(rede_id))
+                else:
+                    # Loop não rodando - executar diretamente
+                    loop.run_until_complete(self.movement_service.start_automatic_movement(rede_id))
+            except RuntimeError:
+                # Criar novo loop
+                asyncio.run(self.movement_service.start_automatic_movement(rede_id))
+            
+            return True
+        except Exception as e:
+            print(f"Erro ao iniciar movimento de veículos: {e}")
+            return False
+    
+    def stop_vehicle_movement(self) -> bool:
+        """Para o movimento automático de veículos"""
+        if not self.movement_service:
+            return False
+        
+        try:
+            self.movement_service.stop_automatic_movement()
+            return True
+        except Exception as e:
+            print(f"Erro ao parar movimento de veículos: {e}")
+            return False
+    
+    def get_movement_statistics(self) -> Dict[str, Any]:
+        """Obtém estatísticas do movimento de veículos"""
+        if not self.movement_service:
+            return {
+                "error": "Serviço de movimento não disponível",
+                "total_vehicles": len(self.vehicle_positions),
+                "active_vehicles": 0,
+                "active_routes": len(self.detailed_routes)
+            }
+        
+        try:
+            # Obter estatísticas do serviço de movimento
+            movement_stats = self.movement_service.get_movement_statistics()
+            
+            # Combinar com estatísticas locais
+            stats = {
+                "total_vehicles": movement_stats.get("total_vehicles", len(self.vehicle_positions)),
+                "active_vehicles": movement_stats.get("active_vehicles", 0),
+                "vehicles_by_status": {},
+                "active_routes": movement_stats.get("total_routes", len(self.detailed_routes)),
+                "movement_service_running": movement_stats.get("is_running", False)
+            }
+            
+            # Estatísticas detalhadas por status
+            for status in ['idle', 'moving', 'delivering', 'returning']:
+                stats["vehicles_by_status"][status] = movement_stats.get(status, 0)
+            
+            return stats
+        except Exception as e:
+            return {"error": f"Erro ao obter estatísticas: {e}"}

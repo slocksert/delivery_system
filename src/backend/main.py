@@ -1,15 +1,25 @@
 from fastapi import FastAPI, status, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from .config import settings
-from .api import rede, integracao, auth
+from .api import rede, integracao, auth, websocket
 from .dependencies import get_database
+import os
 
 app = FastAPI(
     title=settings.app_name,
     version=settings.version,
     debug=settings.debug,
 )
+
+# Configurar diretórios de templates e arquivos estáticos
+frontend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend")
+templates = Jinja2Templates(directory=os.path.join(frontend_dir, "templates"))
+
+# Montar arquivos estáticos
+app.mount("/static", StaticFiles(directory=os.path.join(frontend_dir, "static")), name="static")
 
 @app.on_event("startup")
 async def startup_event():
@@ -48,9 +58,25 @@ app.include_router(
     tags=["Autenticação"],
 )
 
+app.include_router(
+    websocket.router,
+    tags=["WebSocket - Rastreamento em Tempo Real"],
+)
+
 @app.get("/")
 async def root():
+    """Redireciona para a aplicação frontend ou retorna informações da API"""
+    return RedirectResponse(url="/app")
+
+@app.get("/api")
+async def api_info():
+    """Informações da API"""
     return {"message": "API de Rede de Entrega", "version": settings.version}
+
+@app.get("/app")
+async def frontend_app(request: Request):
+    """Serve a aplicação frontend"""
+    return templates.TemplateResponse("mapa.html", {"request": request})
 
 @app.get("/health")
 async def health_check():
