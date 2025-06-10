@@ -60,12 +60,18 @@ class SQLiteDB:
                 conn.execute('ALTER TABLE redes ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
             
             # Inserir usuários padrão se a tabela estiver vazia
-            cursor = conn.execute("SELECT COUNT(*) FROM users")
-            user_count = cursor.fetchone()[0]
-            
-            if user_count == 0:
-                print("Inserindo usuários padrão...")
-                self._insert_default_users(conn)
+            try:
+                cursor = conn.execute("SELECT COUNT(*) FROM users")
+                user_count = cursor.fetchone()[0]
+                
+                if user_count == 0:
+                    print("Inserindo usuários padrão...")
+                    self._insert_default_users(conn)
+                else:
+                    print(f"✓ Sistema possui {user_count} usuários cadastrados")
+            except Exception as e:
+                print(f"❌ Erro ao verificar/inserir usuários padrão: {e}")
+                # Não interromper a inicialização do banco por isso
             
             conn.commit()
 
@@ -99,17 +105,31 @@ class SQLiteDB:
         ]
         
         for user in default_users:
-            hashed_password = pwd_context.hash(user["password"])
-            conn.execute('''
-                INSERT INTO users (username, email, full_name, hashed_password, permissions)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (
-                user["username"],
-                user["email"], 
-                user["full_name"],
-                hashed_password,
-                user["permissions"]
-            ))
+            try:
+                hashed_password = pwd_context.hash(user["password"])
+                # Usar INSERT OR IGNORE para evitar conflitos de chave única
+                conn.execute('''
+                    INSERT OR IGNORE INTO users (username, email, full_name, hashed_password, permissions)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (
+                    user["username"],
+                    user["email"], 
+                    user["full_name"],
+                    hashed_password,
+                    user["permissions"]
+                ))
+                
+                # Verificar se o usuário foi realmente inserido
+                cursor = conn.execute(
+                    "SELECT COUNT(*) FROM users WHERE username = ?",
+                    (user["username"],)
+                )
+                if cursor.fetchone()[0] > 0:
+                    print(f"✓ Usuário {user['username']} disponível no sistema")
+                    
+            except Exception as e:
+                print(f"❌ Erro ao processar usuário {user['username']}: {e}")
+                # Não interromper o processo para outros usuários
 
     def cleanup_test_db(self):
         """Remove o arquivo de banco de teste se existir"""
