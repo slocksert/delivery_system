@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Dict, Any, Set, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException, status, Query
 from fastapi.responses import JSONResponse
+from starlette.websockets import WebSocketState
 
 from ..services.rede_service import RedeService
 from ..services.vehicle_movement_service import VehicleMovementService
@@ -40,25 +41,48 @@ class ConnectionManager:
         """Remove conexão WebSocket de uma rede"""
         if rede_id in self.active_connections:
             self.active_connections[rede_id].discard(websocket)
+            print(f"✓ Cliente desconectado da rede {rede_id}. Restantes: {len(self.active_connections[rede_id])}")
             
             # Remove rede se não houver mais conexões
             if not self.active_connections[rede_id]:
+                print(f"🧹 Limpando dados para rede {rede_id} sem conexões ativas")
                 del self.active_connections[rede_id]
                 if rede_id in self.last_data:
                     del self.last_data[rede_id]
                 if rede_id in self.broadcasting:
-                    del self.broadcasting[rede_id]
+                    self.broadcasting[rede_id] = False
                 # Parar movimento automático se não há mais clientes
                 if rede_id in self.movement_services:
                     self.movement_services[rede_id].stop_automatic_movement()
                     del self.movement_services[rede_id]
-                    
-            print(f"✓ Cliente desconectado da rede {rede_id}")
+    
+    def cleanup_inactive_connections(self, rede_id: str):
+        """Remove conexões inativas de uma rede específica"""
+        if rede_id not in self.active_connections:
+            return
+        
+        inactive_connections = set()
+        for connection in self.active_connections[rede_id]:
+            if connection.client_state != WebSocketState.CONNECTED:
+                inactive_connections.add(connection)
+        
+        for conn in inactive_connections:
+            self.active_connections[rede_id].discard(conn)
+            
+        print(f"🧹 Removidas {len(inactive_connections)} conexões inativas da rede {rede_id}")
+        
+        # Se não há mais conexões após limpeza, desativar broadcast
+        if len(self.active_connections[rede_id]) == 0:
+            self.broadcasting[rede_id] = False
     
     async def send_personal_message(self, message: str, websocket: WebSocket):
         """Envia mensagem para um cliente específico"""
         try:
-            await websocket.send_text(message)
+            # Verificar se a conexão ainda está ativa
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.send_text(message)
+            else:
+                print(f"⚠️ Tentativa de envio para WebSocket fechado (estado: {websocket.client_state})")
         except Exception as e:
             print(f"❌ Erro ao enviar mensagem pessoal: {e}")
     
@@ -70,9 +94,17 @@ class ConnectionManager:
         message = json.dumps(data)
         disconnected = set()
         
-        for connection in self.active_connections[rede_id]:
+        # Criar uma cópia do conjunto para evitar modificação durante iteração
+        connections_copy = self.active_connections[rede_id].copy()
+        
+        for connection in connections_copy:
             try:
-                await connection.send_text(message)
+                # Verificar se a conexão ainda está ativa antes de enviar
+                if connection.client_state == WebSocketState.CONNECTED:
+                    await connection.send_text(message)
+                else:
+                    print(f"⚠️ Removendo conexão inativa (estado: {connection.client_state})")
+                    disconnected.add(connection)
             except Exception as e:
                 print(f"❌ Erro ao transmitir para cliente: {e}")
                 disconnected.add(connection)
@@ -80,6 +112,14 @@ class ConnectionManager:
         # Remove conexões quebradas
         for conn in disconnected:
             self.active_connections[rede_id].discard(conn)
+            
+        # Se não há mais conexões ativas, limpar dados da rede
+        if rede_id in self.active_connections and len(self.active_connections[rede_id]) == 0:
+            del self.active_connections[rede_id]
+            if rede_id in self.last_data:
+                del self.last_data[rede_id]
+            if rede_id in self.broadcasting:
+                self.broadcasting[rede_id] = False
     
     def get_network_stats(self, rede_id: str) -> Dict[str, Any]:
         """Obtém estatísticas de conexão para uma rede"""
@@ -165,6 +205,8 @@ async def websocket_endpoint(
                 print(f"🚀 Movimento automático iniciado para rede {rede_id}")
             
             asyncio.create_task(broadcast_real_time_updates(rede_id, rede_service))
+            # Iniciar tarefa de limpeza periódica de conexões inativas
+            asyncio.create_task(periodic_cleanup(rede_id))
         
         # Manter conexão ativa e aguardar mensagens do cliente
         while True:
@@ -409,6 +451,12 @@ async def broadcast_real_time_updates(rede_id: str, rede_service: RedeService):
     
     while manager.broadcasting.get(rede_id, False):
         try:
+            # Verificar se ainda há conexões ativas para esta rede
+            if rede_id not in manager.active_connections or len(manager.active_connections[rede_id]) == 0:
+                print(f"⚠️ Nenhuma conexão ativa para rede {rede_id}, parando broadcast")
+                manager.broadcasting[rede_id] = False
+                break
+            
             # Obter dados atualizados
             current_data = rede_service.obter_dados_websocket(rede_id)
             
@@ -425,6 +473,17 @@ async def broadcast_real_time_updates(rede_id: str, rede_service: RedeService):
         except Exception as e:
             print(f"❌ Erro na transmissão em tempo real: {e}")
             await asyncio.sleep(5.0)  # Aguardar mais tempo em caso de erro
+
+
+async def periodic_cleanup(rede_id: str):
+    """Realiza limpeza periódica de conexões inativas"""
+    while manager.broadcasting.get(rede_id, False):
+        try:
+            await asyncio.sleep(30)  # Executar a cada 30 segundos
+            manager.cleanup_inactive_connections(rede_id)
+        except Exception as e:
+            print(f"❌ Erro na limpeza periódica para rede {rede_id}: {e}")
+            await asyncio.sleep(60)  # Aguardar mais tempo em caso de erro
 
 
 @router.get(
