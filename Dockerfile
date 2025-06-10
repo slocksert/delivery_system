@@ -39,7 +39,7 @@ ENV PATH=/home/delivery/.local/bin:$PATH
 
 # Criar diretórios necessários
 WORKDIR /app
-RUN mkdir -p /app/data /app/logs /app/uploads && \
+RUN mkdir -p /app/data /app/logs /app/uploads /app/frontend/static /app/frontend/templates && \
     chown -R delivery:delivery /app
 
 # Copiar código da aplicação

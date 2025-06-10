@@ -16,10 +16,25 @@ app = FastAPI(
 
 # Configurar diretórios de templates e arquivos estáticos
 frontend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend")
+print(f"Frontend directory path: {frontend_dir}")
+print(f"Frontend directory exists: {os.path.exists(frontend_dir)}")
+
 templates = Jinja2Templates(directory=os.path.join(frontend_dir, "templates"))
 
-# Montar arquivos estáticos
-app.mount("/static", StaticFiles(directory=os.path.join(frontend_dir, "static")), name="static")
+# Montar arquivos estáticos (criar diretório se não existir)
+static_dir = os.path.join(frontend_dir, "static")
+print(f"Static directory path: {static_dir}")
+print(f"Static directory exists: {os.path.exists(static_dir)}")
+
+if not os.path.exists(static_dir):
+    print("Creating static directory...")
+    os.makedirs(static_dir, exist_ok=True)
+    # Criar subdiretórios básicos
+    os.makedirs(os.path.join(static_dir, "css"), exist_ok=True)
+    os.makedirs(os.path.join(static_dir, "js"), exist_ok=True)
+    print("Static directory created successfully")
+
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 @app.on_event("startup")
 async def startup_event():
