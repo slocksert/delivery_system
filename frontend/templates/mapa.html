@@ -571,7 +571,14 @@
             
             // Atualizar timestamp
             if (data.timestamp) {
-                const time = new Date(data.timestamp).toLocaleTimeString();
+                // Converter para horário brasileiro (UTC-3)
+                const timestamp = new Date(data.timestamp);
+                const time = timestamp.toLocaleTimeString('pt-BR', {
+                    timeZone: 'America/Sao_Paulo',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit'
+                });
                 document.getElementById('lastUpdate').textContent = time;
             }
                  // Atualizar posições de veículos (suporta ambos os formatos)
@@ -661,12 +668,18 @@
                     marker.setLatLng([pos.latitude, pos.longitude]);
                     
                     // Atualizar popup com informações
+                    const updateTime = new Date(pos.timestamp).toLocaleTimeString('pt-BR', {
+                        timeZone: 'America/Sao_Paulo',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit'
+                    });
                     const popup = `
                         <b>Veículo ${pos.vehicle_id}</b><br>
                         Status: ${pos.status}<br>
                         Velocidade: ${pos.speed.toFixed(1)} km/h<br>
                         Direção: ${pos.heading.toFixed(0)}°<br>
-                        Atualizado: ${new Date(pos.timestamp).toLocaleTimeString()}
+                        Atualizado: ${updateTime}
                     `;
                     marker.setPopupContent(popup);
                     
@@ -697,12 +710,18 @@
             
             console.log(`✅ Marcador criado e adicionado ao mapa para veículo ${position.vehicle_id}`);
             
+            const updateTime = new Date(position.timestamp).toLocaleTimeString('pt-BR', {
+                timeZone: 'America/Sao_Paulo',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
             const popup = `
                 <b>Veículo ${position.vehicle_id}</b><br>
                 Status: ${position.status}<br>
                 Velocidade: ${position.speed.toFixed(1)} km/h<br>
                 Direção: ${position.heading.toFixed(0)}°<br>
-                Atualizado: ${new Date(position.timestamp).toLocaleTimeString()}
+                Atualizado: ${updateTime}
             `;
             marker.bindPopup(popup);
             
@@ -820,8 +839,11 @@
         async function generateNetwork() {
             console.log('🔧 Função generateNetwork() chamada');
             
+            // Mostrar modal imediatamente
+            showNetworkModal([]);
+            
             try {
-                // Buscar redes existentes
+                // Buscar redes existentes em paralelo
                 console.log('🔍 Buscando redes existentes...');
                 
                 const listResponse = await fetch('/api/v1/rede/listar', {
@@ -834,23 +856,79 @@
                 if (listResponse.ok) {
                     existingNetworks = await listResponse.json();
                     console.log('📊 Redes encontradas:', existingNetworks.length);
+                    
+                    // Atualizar modal com as redes carregadas
+                    updateNetworksList(existingNetworks);
                 } else {
                     console.warn('⚠️ Erro ao buscar redes:', listResponse.status);
+                    updateNetworksList([]);
                 }
-                
-                // Mostrar modal
-                console.log('🪟 Tentando mostrar modal...');
-                showNetworkModal(existingNetworks);
                 
             } catch (error) {
                 console.error('❌ Erro ao buscar redes:', error);
-                showNetworkModal([]);
+                updateNetworksList([]);
             }
         }
         
+        // Função para atualizar a lista de redes no modal já aberto
+        function updateNetworksList(existingNetworks) {
+            const existingNetworksList = document.getElementById('existingNetworksList');
+            if (!existingNetworksList) {
+                console.error('❌ Lista de redes não encontrada!');
+                return;
+            }
+            
+            // Limpar lista anterior e mostrar loading se ainda não há dados
+            existingNetworksList.innerHTML = '';
+            
+            if (!existingNetworks || existingNetworks.length === 0) {
+                existingNetworksList.innerHTML = '<div style="text-align: center; color: #6b7280; padding: 20px;">Nenhuma rede encontrada</div>';
+                return;
+            }
+            
+            console.log('📋 Atualizando lista com', existingNetworks.length, 'redes');
+            existingNetworks.forEach(network => {
+                const networkItem = document.createElement('div');
+                networkItem.className = 'network-item';
+                networkItem.dataset.networkId = network.id;
+                
+                // Tratar created_at corretamente
+                let createdDateStr = '';
+                if (network.created_at) {
+                    try {
+                        let date;
+                        if (typeof network.created_at === 'number') {
+                            // Se for um número, assumir que já é timestamp Unix em segundos
+                            date = new Date(network.created_at * 1000);
+                        } else if (typeof network.created_at === 'string') {
+                            // Se for string, tentar parsear diretamente
+                            date = new Date(network.created_at);
+                        }
+                        
+                        if (date && !isNaN(date.getTime())) {
+                            createdDateStr = '• Criada: ' + date.toLocaleDateString('pt-BR');
+                        }
+                    } catch (e) {
+                        console.warn('Erro ao processar created_at:', network.created_at, e);
+                    }
+                }
+                
+                networkItem.innerHTML = `
+                    <div class="network-item-name">${network.nome || network.id}</div>
+                    <div class="network-item-info">
+                        ${network.total_nodes || 0} nós • ${network.total_edges || 0} rotas
+                        ${createdDateStr}
+                    </div>
+                `;
+                
+                networkItem.onclick = () => selectNetworkItem(networkItem);
+                existingNetworksList.appendChild(networkItem);
+            });
+        }
+        
         // Funções do Modal
-        function showNetworkModal(existingNetworks) {
-            console.log('🪟 showNetworkModal() chamada com', existingNetworks?.length || 0, 'redes');
+        function showNetworkModal(existingNetworks = []) {
+            console.log('🪟 showNetworkModal() chamada');
             
             const modal = document.getElementById('networkModal');
             if (!modal) {
@@ -866,32 +944,8 @@
                 return;
             }
             
-            // Limpar lista anterior
-            existingNetworksList.innerHTML = '';
-            
-            // Preencher lista de redes existentes
-            if (existingNetworks && existingNetworks.length > 0) {
-                console.log('📋 Preenchendo lista com', existingNetworks.length, 'redes');
-                existingNetworks.forEach(network => {
-                    const networkItem = document.createElement('div');
-                    networkItem.className = 'network-item';
-                    networkItem.dataset.networkId = network.id;
-                    
-                    networkItem.innerHTML = `
-                        <div class="network-item-name">${network.nome || network.id}</div>
-                        <div class="network-item-info">
-                            ${network.total_nodes || 0} nós • ${network.total_edges || 0} rotas
-                            ${network.created_at ? '• Criada: ' + new Date(network.created_at * 1000).toLocaleDateString() : ''}
-                        </div>
-                    `;
-                    
-                    networkItem.onclick = () => selectNetworkItem(networkItem);
-                    existingNetworksList.appendChild(networkItem);
-                });
-            } else {
-                console.log('📭 Nenhuma rede encontrada - mostrando mensagem vazia');
-                existingNetworksList.innerHTML = '<div style="text-align: center; color: #6b7280; padding: 20px;">Nenhuma rede encontrada</div>';
-            }
+            // Mostrar loading inicialmente
+            existingNetworksList.innerHTML = '<div style="text-align: center; color: #6b7280; padding: 20px;">🔄 Carregando redes...</div>';
             
             // Resetar seleções
             const createNewRadio = document.getElementById('createNew');

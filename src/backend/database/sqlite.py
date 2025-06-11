@@ -183,16 +183,36 @@ class SQLiteDB:
     def listar_redes(self) -> List[Dict[str, Any]]:
         with self._lock, self._get_conn() as conn:
             cur = conn.execute('SELECT id, nome, descricao, json, created_at FROM redes')
-            return [
-                {
+            resultado = []
+            
+            for row in cur.fetchall():
+                # Converter created_at para timestamp Unix se necessário
+                created_at = row[4]
+                if created_at and isinstance(created_at, str):
+                    try:
+                        # Tentar converter string de data para timestamp
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                        created_at = int(dt.timestamp())
+                    except (ValueError, AttributeError):
+                        # Se falhar, usar timestamp atual como fallback
+                        import time
+                        created_at = int(time.time())
+                elif not created_at:
+                    # Se for None, usar timestamp atual
+                    import time
+                    created_at = int(time.time())
+                    
+                rede_data = {
                     "id": row[0], 
                     "nome": row[1], 
                     "descricao": row[2], 
-                    "created_at": row[4],
+                    "created_at": created_at,
                     **json.loads(row[3])
                 }
-                for row in cur.fetchall()
-            ]
+                resultado.append(rede_data)
+                
+            return resultado
 
     def carregar_todas_redes(self) -> Dict[str, Dict[str, Any]]:
         redes = {}
