@@ -927,35 +927,8 @@
         async function generateNetwork() {
             console.log('🔧 Função generateNetwork() chamada');
             
-            // Mostrar modal imediatamente
-            showNetworkModal([]);
-            
-            try {
-                // Buscar redes existentes em paralelo
-                console.log('🔍 Buscando redes existentes...');
-                
-                const listResponse = await fetch('/api/v1/rede/listar', {
-                    method: 'GET',
-                    headers: getAuthHeaders(),
-                    credentials: 'include'
-                });
-                
-                let existingNetworks = [];
-                if (listResponse.ok) {
-                    existingNetworks = await listResponse.json();
-                    console.log('📊 Redes encontradas:', existingNetworks.length);
-                    
-                    // Atualizar modal com as redes carregadas
-                    updateNetworksList(existingNetworks);
-                } else {
-                    console.warn('⚠️ Erro ao buscar redes:', listResponse.status);
-                    updateNetworksList([]);
-                }
-                
-            } catch (error) {
-                console.error('❌ Erro ao buscar redes:', error);
-                updateNetworksList([]);
-            }
+            // Mostrar modal sem carregar redes automaticamente
+            showNetworkModal();
         }
         
         // Função para atualizar a lista de redes no modal já aberto
@@ -1015,7 +988,7 @@
         }
         
         // Funções do Modal
-        function showNetworkModal(existingNetworks = []) {
+        function showNetworkModal() {
             console.log('🪟 showNetworkModal() chamada');
             
             const modal = document.getElementById('networkModal');
@@ -1026,15 +999,6 @@
             
             console.log('✅ Elemento modal encontrado:', modal);
             
-            const existingNetworksList = document.getElementById('existingNetworksList');
-            if (!existingNetworksList) {
-                console.error('❌ Lista de redes não encontrada!');
-                return;
-            }
-            
-            // Mostrar loading inicialmente
-            existingNetworksList.innerHTML = '<div style="text-align: center; color: #6b7280; padding: 20px;">🔄 Carregando redes...</div>';
-            
             // Resetar seleções
             const createNewRadio = document.getElementById('createNew');
             if (createNewRadio) {
@@ -1042,6 +1006,12 @@
                 toggleNetworkOptions();
             } else {
                 console.error('❌ Radio button createNew não encontrado!');
+            }
+            
+            // Limpar lista de redes existentes
+            const existingNetworksList = document.getElementById('existingNetworksList');
+            if (existingNetworksList) {
+                existingNetworksList.innerHTML = '<div style="text-align: center; color: #6b7280; padding: 20px;">Selecione "Carregar rede existente" para ver as redes disponíveis</div>';
             }
             
             // Mostrar modal
@@ -1071,11 +1041,52 @@
                 newSection.style.display = 'none';
                 confirmBtn.textContent = 'Carregar Rede';
                 confirmBtn.className = 'btn btn-success';
+                
+                // Carregar redes existentes apenas quando esta opção for selecionada
+                loadExistingNetworksList();
             } else {
                 existingSection.style.display = 'none';
                 newSection.style.display = 'block';
                 confirmBtn.textContent = 'Criar Rede';
                 confirmBtn.className = 'btn btn-primary';
+            }
+        }
+        
+        // Nova função para carregar redes existentes
+        async function loadExistingNetworksList() {
+            const existingNetworksList = document.getElementById('existingNetworksList');
+            if (!existingNetworksList) {
+                console.error('❌ Lista de redes não encontrada!');
+                return;
+            }
+            
+            // Mostrar loading
+            existingNetworksList.innerHTML = '<div style="text-align: center; color: #6b7280; padding: 20px;">🔄 Carregando redes...</div>';
+            
+            try {
+                console.log('🔍 Buscando redes existentes...');
+                
+                const listResponse = await fetch('/api/v1/rede/listar', {
+                    method: 'GET',
+                    headers: getAuthHeaders(),
+                    credentials: 'include'
+                });
+                
+                let existingNetworks = [];
+                if (listResponse.ok) {
+                    existingNetworks = await listResponse.json();
+                    console.log('📊 Redes encontradas:', existingNetworks.length);
+                    
+                    // Atualizar modal com as redes carregadas
+                    updateNetworksList(existingNetworks);
+                } else {
+                    console.warn('⚠️ Erro ao buscar redes:', listResponse.status);
+                    updateNetworksList([]);
+                }
+                
+            } catch (error) {
+                console.error('❌ Erro ao buscar redes:', error);
+                updateNetworksList([]);
             }
         }
         
