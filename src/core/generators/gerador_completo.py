@@ -10,12 +10,18 @@ import osmnx as ox
 import networkx as nx
 from typing import List, Tuple, Optional, Dict
 from itertools import combinations
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 from ..entities.models import (
     Deposito, Hub, Cliente, ZonaEntrega, Veiculo, Rota, RedeEntrega,
     TipoVeiculo, PrioridadeCliente
 )
+
+# Função utilitária para timestamps brasileiros
+def get_brazilian_timestamp() -> datetime:
+    """Retorna timestamp atual no fuso horário brasileiro (UTC-3)"""
+    brazilian_tz = timezone(timedelta(hours=-3))
+    return datetime.now(brazilian_tz)
 
 
 class GeradorMaceioCompleto:
@@ -836,7 +842,7 @@ class GeradorMaceioCompleto:
         """Salva a rede completa em arquivo JSON"""
         dados = {
             "metadata": {
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": get_brazilian_timestamp().isoformat(),
                 "gerador": "GeradorMaceioCompleto",
                 "seed": self.seed,
                 "versao": "2.0"

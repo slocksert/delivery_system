@@ -10,7 +10,7 @@ from core.algorithms.flow_algorithms import calculate_network_flow, FlowResult
 from typing import List, Dict, Any, Optional, Tuple, Union
 import time
 import math
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, asdict
 try:
     import osmnx as ox
@@ -23,6 +23,13 @@ except ImportError:
     print("OSMNX não disponível - funcionalidades de rota real limitadas")
 
 from ..database.sqlite import SQLiteDB
+
+# Função utilitária para timestamps brasileiros
+def get_brazilian_timestamp() -> datetime:
+    """Retorna timestamp atual no fuso horário brasileiro (UTC-3)"""
+    # Criar timezone brasileiro (UTC-3)
+    brazilian_tz = timezone(timedelta(hours=-3))
+    return datetime.now(brazilian_tz)
 
 # Estruturas de dados para WebSocket e rastreamento
 @dataclass
@@ -394,7 +401,7 @@ class RedeService:
                 try:
                     timestamp_str = pos.timestamp.isoformat() if hasattr(pos.timestamp, 'isoformat') else str(pos.timestamp)
                 except (AttributeError, TypeError):
-                    timestamp_str = datetime.now().isoformat()
+                    timestamp_str = get_brazilian_timestamp().isoformat()
                 
                 veiculo_info.update({
                     "posicao_atual": {
@@ -829,7 +836,7 @@ class RedeService:
             vehicle_id=vehicle_id,
             latitude=latitude,
             longitude=longitude,
-            timestamp=datetime.now(),
+            timestamp=get_brazilian_timestamp(),
             speed=speed,
             heading=heading,
             status=status
@@ -1123,7 +1130,7 @@ class RedeService:
                                            if any(r.route_id.startswith(v.id) for v in rede.veiculos)]))
         
         return {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": get_brazilian_timestamp().isoformat(),
             "rede_id": rede_id,
             "veiculos": {
                 "total": len(rede.veiculos),
@@ -1239,7 +1246,7 @@ class RedeService:
             try:
                 timestamp_str = pos.timestamp.isoformat() if hasattr(pos.timestamp, 'isoformat') else str(pos.timestamp)
             except (AttributeError, TypeError):
-                timestamp_str = datetime.now().isoformat()
+                timestamp_str = get_brazilian_timestamp().isoformat()
                 
             posicoes_json.append({
                 "vehicle_id": pos.vehicle_id,
@@ -1285,7 +1292,7 @@ class RedeService:
         return {
             "type": "network_update",
             "rede_id": rede_id,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": get_brazilian_timestamp().isoformat(),
             "estatisticas": estatisticas,
             "posicoes_veiculos": posicoes_json,
             "rotas_ativas": rotas_ativas
@@ -1293,7 +1300,7 @@ class RedeService:
     
     def limpar_dados_antigos(self, max_age_minutes: int = 60):
         """Remove dados antigos de posições e rotas"""
-        current_time = datetime.now()
+        current_time = get_brazilian_timestamp()
         
         # Limpar posições antigas
         old_positions = []
@@ -1317,7 +1324,7 @@ class RedeService:
         positions = []
         
         # Simular posições ao longo dos waypoints
-        current_time = datetime.now()
+        current_time = get_brazilian_timestamp()
         import random
         for i, waypoint in enumerate(route.waypoints):
             # Velocidade realística variável
@@ -1388,7 +1395,7 @@ class RedeService:
         
         relatorio = {
             "rede_id": rede_id,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": get_brazilian_timestamp().isoformat(),
             "resumo_rede": {
                 "depositos": len(rede.depositos),
                 "hubs": len(rede.hubs),
@@ -1449,7 +1456,7 @@ class RedeService:
             "routes": [],
             "real_time_data": {
                 "traffic_stats": self.obter_estatisticas_trafego(),
-                "last_update": datetime.now().isoformat()
+                "last_update": get_brazilian_timestamp().isoformat()
             }
         }
         
@@ -1458,7 +1465,7 @@ class RedeService:
             try:
                 timestamp_str = pos.timestamp.isoformat() if hasattr(pos.timestamp, 'isoformat') else str(pos.timestamp)
             except (AttributeError, TypeError):
-                timestamp_str = datetime.now().isoformat()
+                timestamp_str = get_brazilian_timestamp().isoformat()
                 
             websocket_data["vehicles"].append({
                 "vehicle_id": pos.vehicle_id,

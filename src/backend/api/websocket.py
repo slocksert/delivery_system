@@ -2,13 +2,19 @@ from jose import JWTError, jwt
 import asyncio
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Set, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException, status, Query
 from fastapi.responses import JSONResponse
 from starlette.websockets import WebSocketState
 
 from ..services.rede_service import RedeService
+
+# Função utilitária para timestamps brasileiros
+def get_brazilian_timestamp() -> datetime:
+    """Retorna timestamp atual no fuso horário brasileiro (UTC-3)"""
+    brazilian_tz = timezone(timedelta(hours=-3))
+    return datetime.now(brazilian_tz)
 from ..services.vehicle_movement_service import VehicleMovementService
 from ..dependencies import get_rede_service
 from ..auth.auth import User, get_current_active_user, SECRET_KEY, ALGORITHM
@@ -579,7 +585,7 @@ async def start_vehicle_simulation(
                 "message": f"Simulação iniciada para rede {rede_id}",
                 "data": {
                     "rede_id": rede_id,
-                    "simulation_started": datetime.now().isoformat()
+                    "simulation_started": get_brazilian_timestamp().isoformat()
                 }
             }
         )
@@ -596,11 +602,11 @@ async def run_vehicle_simulation(rede_id: str, rede_service: RedeService):
     try:
         # Simular movimento de 3 veículos por 5 minutos
         simulation_duration = 300  # 5 minutos
-        start_time = datetime.now()
+        start_time = get_brazilian_timestamp()
         
         vehicle_ids = ["sim_vehicle_1", "sim_vehicle_2", "sim_vehicle_3"]
         
-        while (datetime.now() - start_time).seconds < simulation_duration:
+        while (get_brazilian_timestamp() - start_time).seconds < simulation_duration:
             for vehicle_id in vehicle_ids:
                 # Simular movimento básico de veículo
                 try:

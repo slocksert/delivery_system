@@ -4,11 +4,17 @@ Serviço de movimentação automática de veículos para simulação realista.
 import asyncio
 import random
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
 from .rede_service import RedeService, VehiclePosition, DetailedRoute
+
+# Função utilitária para timestamps brasileiros
+def get_brazilian_timestamp() -> datetime:
+    """Retorna timestamp atual no fuso horário brasileiro (UTC-3)"""
+    brazilian_tz = timezone(timedelta(hours=-3))
+    return datetime.now(brazilian_tz)
 
 
 @dataclass
@@ -84,7 +90,7 @@ class VehicleMovementService:
                             route_id=route_id,
                             progress_percent=progress,
                             status="moving",
-                            last_update=datetime.now(),
+                            last_update=get_brazilian_timestamp(),
                             movement_speed=random.uniform(8.0, 15.0)  # % por minuto (velocidade mais alta)
                         )
                     else:
@@ -95,8 +101,8 @@ class VehicleMovementService:
                     self.vehicle_states[vehicle.id] = VehicleMovementState(
                         vehicle_id=vehicle.id,
                         status="delivering",
-                        last_update=datetime.now(),
-                        pause_until=datetime.now() + timedelta(minutes=random.randint(5, 15))
+                        last_update=get_brazilian_timestamp(),
+                        pause_until=get_brazilian_timestamp() + timedelta(minutes=random.randint(5, 15))
                     )
                 else:
                     # Veículo idle - decidir se deve sair para entrega
@@ -106,7 +112,7 @@ class VehicleMovementService:
                         self.vehicle_states[vehicle.id] = VehicleMovementState(
                             vehicle_id=vehicle.id,
                             status="idle",
-                            last_update=datetime.now()
+                            last_update=get_brazilian_timestamp()
                         )
             else:
                 # Criar posição inicial se não existe
@@ -178,7 +184,7 @@ class VehicleMovementService:
                         route_id=first_route.route_id,
                         progress_percent=0.0,
                         status="moving",
-                        last_update=datetime.now(),
+                        last_update=get_brazilian_timestamp(),
                         movement_speed=random.uniform(10.0, 20.0),  # % por minuto (velocidade alta)
                         target_progress=100.0,
                         current_client_id=client_ids[0]  # Primeiro cliente da rota
@@ -190,7 +196,7 @@ class VehicleMovementService:
                     self.vehicle_states[vehicle_id] = VehicleMovementState(
                         vehicle_id=vehicle_id,
                         status="idle",
-                        last_update=datetime.now()
+                        last_update=get_brazilian_timestamp()
                     )
         except Exception as e:
             print(f"❌ Erro ao atribuir rota para veículo {vehicle_id}: {e}")
@@ -225,7 +231,7 @@ class VehicleMovementService:
                 self.vehicle_states[vehicle.id] = VehicleMovementState(
                     vehicle_id=vehicle.id,
                     status="idle",
-                    last_update=datetime.now()
+                    last_update=get_brazilian_timestamp()
                 )
                 
                 print(f"📍 Posição inicial criada para veículo {vehicle.id}")
@@ -237,7 +243,7 @@ class VehicleMovementService:
         
         while self.is_running:
             try:
-                current_time = datetime.now()
+                current_time = get_brazilian_timestamp()
                 
                 # Atualizar cada veículo
                 for vehicle_id, state in list(self.vehicle_states.items()):
@@ -361,7 +367,7 @@ class VehicleMovementService:
         
         idle_vehicles = [
             vehicle_id for vehicle_id, state in self.vehicle_states.items()
-            if state.status == "idle" and (not state.pause_until or datetime.now() >= state.pause_until)
+            if state.status == "idle" and (not state.pause_until or get_brazilian_timestamp() >= state.pause_until)
         ]
         
         if idle_vehicles and random.random() < 0.3:  # 30% chance

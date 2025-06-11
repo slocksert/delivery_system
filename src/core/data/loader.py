@@ -6,12 +6,18 @@ Suporte para todas as entidades do sistema
 import json
 import networkx as nx
 from typing import Dict, List, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 from ..entities.models import (
     Deposito, Hub, Cliente, ZonaEntrega, Veiculo, Pedido, Rota, RedeEntrega,
     TipoVeiculo, StatusPedido, PrioridadeCliente
 )
+
+# Função utilitária para timestamps brasileiros
+def get_brazilian_timestamp() -> datetime:
+    """Retorna timestamp atual no fuso horário brasileiro (UTC-3)"""
+    brazilian_tz = timezone(timedelta(hours=-3))
+    return datetime.now(brazilian_tz)
 
 
 def carregar_rede_completa(path: str) -> RedeEntrega:
@@ -126,7 +132,7 @@ def carregar_rede_completa(path: str) -> RedeEntrega:
         prioridade = PrioridadeCliente(p.get("prioridade", 2))
         
         # Tratar timestamp
-        timestamp_criacao = datetime.now()
+        timestamp_criacao = get_brazilian_timestamp()
         if "timestamp_criacao" in p:
             timestamp_criacao = datetime.fromisoformat(p["timestamp_criacao"])
         

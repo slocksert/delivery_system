@@ -360,6 +360,58 @@
         .radio-item input[type="radio"] {
             margin: 0;
         }
+        
+        /* Loading overlay para o modal */
+        .modal-loading {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+            border-radius: 0;
+        }
+        
+        .loading-content {
+            text-align: center;
+            padding: 20px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            min-width: 300px;
+        }
+        
+        .loading-spinner {
+            width: 50px;
+            height: 50px;
+            border: 5px solid #f3f4f6;
+            border-top: 5px solid #2563eb;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .loading-text {
+            font-size: 18px;
+            color: #1f2937;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        
+        .loading-subtext {
+            font-size: 14px;
+            color: #6b7280;
+            margin-top: 8px;
+        }
     </style>
 </head>
 <body>
@@ -447,6 +499,15 @@
             <div class="modal-footer">
                 <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
                 <button id="confirmBtn" class="btn btn-primary" onclick="confirmNetworkSelection()">Criar Rede</button>
+            </div>
+            
+            <!-- Loading overlay -->
+            <div id="modalLoading" class="modal-loading">
+                <div class="loading-content">
+                    <div class="loading-spinner"></div>
+                    <div class="loading-text" id="loadingText">Criando rede...</div>
+                    <div class="loading-subtext" id="loadingSubtext">Aguarde enquanto a rede é configurada</div>
+                </div>
             </div>
         </div>
     </div>
@@ -729,21 +790,48 @@
             console.log(`📝 Veículo ${position.vehicle_id} adicionado ao cache. Total: ${vehicles.size}`);
         }
         
-        // Carregar dados da rede
-        async function loadNetworkData(redeId) {
-            try {
-                const response = await fetch(`/api/v1/rede/${redeId}`, {
-                    method: 'GET',
-                    headers: getAuthHeaders(),
-                    credentials: 'include'
-                });
-                if (response.ok) {
-                    const rede = await response.json();
-                    displayNetworkElements(rede);
+        // Carregar dados da rede com retry
+        async function loadNetworkData(redeId, maxAttempts = 3) {
+            console.log(`📊 Carregando dados da rede ${redeId}...`);
+            
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                try {
+                    console.log(`🔍 Tentativa ${attempt}/${maxAttempts} - Carregando dados da rede ${redeId}...`);
+                    
+                    const response = await fetch(`/api/v1/rede/${redeId}`, {
+                        method: 'GET',
+                        headers: getAuthHeaders(),
+                        credentials: 'include'
+                    });
+                    
+                    if (response.ok) {
+                        const rede = await response.json();
+                        console.log(`✅ Dados da rede ${redeId} carregados com sucesso:`, rede);
+                        displayNetworkElements(rede);
+                        return true; // Sucesso
+                    } else {
+                        console.warn(`⚠️ Erro ${response.status} ao carregar rede ${redeId} (tentativa ${attempt})`);
+                        
+                        if (response.status === 404) {
+                            throw new Error(`Rede ${redeId} não encontrada`);
+                        }
+                    }
+                } catch (error) {
+                    console.error(`❌ Erro na tentativa ${attempt} de carregar rede ${redeId}:`, error);
+                    
+                    // Se é a última tentativa, propagate o erro
+                    if (attempt === maxAttempts) {
+                        console.error(`❌ Falha definitiva ao carregar dados da rede ${redeId}`);
+                        throw error;
+                    }
+                    
+                    // Aguardar antes da próxima tentativa
+                    console.log(`⏳ Aguardando 1s antes da próxima tentativa...`);
+                    await new Promise(resolve => setTimeout(resolve, 1000));
                 }
-            } catch (error) {
-                console.error('❌ Erro ao carregar dados da rede:', error);
             }
+            
+            return false;
         }
         
         // Exibir elementos da rede no mapa
@@ -1011,6 +1099,56 @@
             }
         }
         
+        // Função para aguardar que a rede esteja totalmente criada
+        async function waitForNetworkToBeReady(redeId, maxAttempts = 10, intervalMs = 1000) {
+            console.log(`⏳ Verificando se a rede ${redeId} está pronta... (máx ${maxAttempts} tentativas)`);
+            
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                try {
+                    console.log(`🔍 Tentativa ${attempt}/${maxAttempts} - Verificando rede ${redeId}...`);
+                    
+                    const response = await fetch(`/api/v1/rede/${redeId}/info`, {
+                        method: 'GET',
+                        headers: getAuthHeaders(),
+                        credentials: 'include'
+                    });
+                    
+                    if (response.ok) {
+                        const info = await response.json();
+                        console.log(`✅ Rede ${redeId} encontrada com ${info.total_nodes} nós e ${info.total_edges} rotas`);
+                        
+                        // Verificar se a rede tem dados suficientes para ser considerada "pronta"
+                        if (info.total_nodes > 0 && info.total_edges > 0) {
+                            console.log(`✅ Rede ${redeId} está pronta para uso!`);
+                            return true;
+                        } else {
+                            console.log(`⚠️ Rede ${redeId} existe mas ainda não tem dados completos`);
+                        }
+                    } else if (response.status === 404) {
+                        console.log(`⏳ Rede ${redeId} ainda não foi encontrada (tentativa ${attempt}/${maxAttempts})`);
+                    } else {
+                        console.warn(`⚠️ Erro ${response.status} ao verificar rede ${redeId}`);
+                    }
+                    
+                    // Se não é a última tentativa, aguardar antes da próxima
+                    if (attempt < maxAttempts) {
+                        console.log(`⏳ Aguardando ${intervalMs}ms antes da próxima verificação...`);
+                        await new Promise(resolve => setTimeout(resolve, intervalMs));
+                    }
+                } catch (error) {
+                    console.warn(`❌ Erro na tentativa ${attempt} de verificar rede ${redeId}:`, error);
+                    
+                    // Se não é a última tentativa, aguardar antes da próxima
+                    if (attempt < maxAttempts) {
+                        await new Promise(resolve => setTimeout(resolve, intervalMs));
+                    }
+                }
+            }
+            
+            console.warn(`⚠️ Timeout: Rede ${redeId} não ficou pronta após ${maxAttempts} tentativas`);
+            return false;
+        }
+        
         async function loadExistingNetwork() {
             const selectedItem = document.querySelector('.network-item.selected');
             
@@ -1022,20 +1160,35 @@
             const networkId = selectedItem.dataset.networkId;
             const networkName = selectedItem.querySelector('.network-item-name').textContent;
             
+            // Mostrar loading
+            const confirmBtn = document.getElementById('confirmBtn');
+            const originalBtnText = confirmBtn.textContent;
+            confirmBtn.disabled = true;
+            confirmBtn.textContent = '🔄 Carregando...';
+            
             try {
                 console.log('✓ Carregando rede existente:', networkName);
                 
                 currentNetworkId = networkId;
                 document.getElementById('networkId').textContent = networkName;
                 
-                await loadNetworkData(networkId);
-                closeModal();
+                // Usar a função melhorada de carregamento
+                const success = await loadNetworkData(networkId);
                 
-                console.log('✅ Rede carregada com sucesso:', networkName);
+                if (success) {
+                    closeModal();
+                    console.log('✅ Rede carregada com sucesso:', networkName);
+                } else {
+                    alert('Erro ao carregar os dados da rede. Tente novamente.');
+                }
                 
             } catch (error) {
                 console.error('❌ Erro ao carregar rede:', error);
                 alert('Erro ao carregar a rede selecionada.');
+            } finally {
+                // Restaurar botão
+                confirmBtn.disabled = false;
+                confirmBtn.textContent = originalBtnText;
             }
         }
         
@@ -1060,6 +1213,18 @@
                 return;
             }
             
+            // Mostrar loading overlay
+            const modalLoading = document.getElementById('modalLoading');
+            const loadingText = document.getElementById('loadingText');
+            const loadingSubtext = document.getElementById('loadingSubtext');
+            
+            modalLoading.style.display = 'flex';
+            loadingText.textContent = 'Criando rede...';
+            loadingSubtext.textContent = 'Aguarde enquanto a rede é configurada';
+            
+            // Forçar atualização do DOM
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
             try {
                 console.log('🔄 Criando nova rede:', networkName);
                 
@@ -1080,23 +1245,44 @@
                     console.log('📨 Resposta da API:', result);
                     
                     if (result.status === 'success' && result.data && result.data.rede_id) {
-                        currentNetworkId = result.data.rede_id;
+                        const redeId = result.data.rede_id;
+                        currentNetworkId = redeId;
                         document.getElementById('networkId').textContent = networkName;
                         
-                        await loadNetworkData(result.data.rede_id);
-                        closeModal();
+                        // Atualizar loading para mostrar progresso
+                        loadingText.textContent = 'Aguardando criação...';
+                        loadingSubtext.textContent = 'Verificando se a rede está pronta';
                         
-                        console.log('✅ Nova rede criada com sucesso:', networkName);
+                        // Aguardar que a rede seja criada completamente com retry
+                        console.log('⏳ Aguardando que a rede seja totalmente criada...');
+                        const networkReady = await waitForNetworkToBeReady(redeId, 10, 1000); // 10 tentativas, 1s intervalo
+                        
+                        if (networkReady) {
+                            loadingText.textContent = 'Carregando dados...';
+                            loadingSubtext.textContent = 'Finalizando configuração da rede';
+                            await loadNetworkData(redeId);
+                            modalLoading.style.display = 'none';
+                            closeModal();
+                            console.log('✅ Nova rede criada e carregada com sucesso:', networkName);
+                        } else {
+                            console.warn('⚠️ Rede criada mas dados podem não estar totalmente disponíveis');
+                            modalLoading.style.display = 'none';
+                            closeModal();
+                            alert('Rede criada com sucesso! Se os dados não aparecerem, recarregue a página.');
+                        }
                     } else {
                         console.error('❌ Formato de resposta inesperado:', result);
+                        modalLoading.style.display = 'none';
                         alert('Erro inesperado ao criar a rede.');
                     }
                 } else {
                     console.error('❌ Erro ao criar rede:', response.statusText);
+                    modalLoading.style.display = 'none';
                     alert('Erro ao criar a rede. Tente novamente.');
                 }
             } catch (error) {
                 console.error('❌ Erro ao criar rede:', error);
+                modalLoading.style.display = 'none';
                 alert('Erro ao criar a rede. Verifique sua conexão.');
             }
         }
