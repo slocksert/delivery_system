@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+=======
+from fastapi import APIRouter, Depends, HTTPException, status
+>>>>>>> 9e2cd45d60b08cf367bd55f73d16178a5dd3e41e
 from fastapi.responses import JSONResponse
 from ..models.schemas import (
     NetworkCreate,
@@ -15,7 +19,10 @@ from ..auth.auth import (
     require_admin_permission,
     User
 )
+<<<<<<< HEAD
 from src.core.entities.models import PrioridadeCliente
+=======
+>>>>>>> 9e2cd45d60b08cf367bd55f73d16178a5dd3e41e
 from typing import List, Dict, Any, Optional
 
 router = APIRouter(
@@ -24,6 +31,10 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
+<<<<<<< HEAD
+
+=======
+>>>>>>> 9e2cd45d60b08cf367bd55f73d16178a5dd3e41e
 @router.post(
     "/criar-maceio-completo",
     response_model=StatusResponse,
@@ -544,6 +555,7 @@ async def reset_delivery_system(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erro ao resetar entregas: {str(e)}"
+<<<<<<< HEAD
         )
 
 @router.post(
@@ -662,3 +674,6 @@ async def relatorio_operacional(
         "capacidade_ociosa": ociosos,
         "total_rotas": len(getattr(rede, "rotas", []))
     }
+=======
+        )
+>>>>>>> 9e2cd45d60b08cf367bd55f73d16178a5dd3e41e
