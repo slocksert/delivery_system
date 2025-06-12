@@ -516,7 +516,11 @@
         <button onclick="generateNetwork()">Carregar/Gerar Rede</button>
         <button onclick="startTracking()" id="startBtn">Iniciar Rastreamento</button>
         <button onclick="stopTracking()" id="stopBtn" disabled>Parar</button>
-
+        <button onclick="showBlockRouteModal()">Bloquear Rota</button>
+        <button onclick="showIncreaseDemandModal()">Aumentar Demanda Zona</button>
+        <button onclick="showUnblockRouteModal()">Desbloquear Rota</button>
+        <button onclick="showPriorityModal()">Alterar Prioridade Cliente</button>
+        <button onclick="mostrarRelatorio()">Ver Relatório Operacional</button>
     </div>
 
      <div id="logBox" class="log-box">
@@ -594,8 +598,6 @@
             </div>
         </div>
     </div>
-
-<<<<<<< HEAD
     <!-- Modal para bloquear rota -->
     <div id="blockRouteModal" class="modal">
         <div class="modal-content">

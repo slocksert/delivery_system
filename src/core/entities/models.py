@@ -25,18 +25,11 @@ class StatusPedido(Enum):
 
 
 class PrioridadeCliente(Enum):
-<<<<<<< HEAD
     URGENTE = 1
     ALTA = 2
     NORMAL = 3
     BAIXA = 4
-=======
-    BAIXA = 1
-    NORMAL = 2
-    ALTA = 3
-    URGENTE = 4
-    CRITICA = 5
->>>>>>> 9e2cd45d60b08cf367bd55f73d16178a5dd3e41e
+
 
 
 @dataclass
