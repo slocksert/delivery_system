@@ -116,7 +116,11 @@
             top: 100px;
             left: 20px;
             width: 460px;
+<<<<<<< HEAD
             height: 450px;
+=======
+            height: 750px;
+>>>>>>> 9e2cd45d60b08cf367bd55f73d16178a5dd3e41e
             overflow: auto;
             background: rgba(255, 255, 255, 0.95);
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
@@ -126,7 +130,11 @@
             font-size: 14px;
             padding: 15px;
             border-radius: 8px;
+<<<<<<< HEAD
             z-index: 900;
+=======
+            z-index: 2000;
+>>>>>>> 9e2cd45d60b08cf367bd55f73d16178a5dd3e41e
             line-height: 1.5;
         }
 
@@ -168,7 +176,11 @@
             padding: 8px 16px;
             border-radius: 6px;
             cursor: pointer;
+<<<<<<< HEAD
             margin: 0 2px;
+=======
+            margin: 0 5px;
+>>>>>>> 9e2cd45d60b08cf367bd55f73d16178a5dd3e41e
             font-size: 14px;
         }
 
@@ -516,6 +528,7 @@
         <button onclick="generateNetwork()">Carregar/Gerar Rede</button>
         <button onclick="startTracking()" id="startBtn">Iniciar Rastreamento</button>
         <button onclick="stopTracking()" id="stopBtn" disabled>Parar</button>
+<<<<<<< HEAD
         <button onclick="showBlockRouteModal()">Bloquear Rota</button>
         <button onclick="showIncreaseDemandModal()">Aumentar Demanda Zona</button>
         <button onclick="showUnblockRouteModal()">Desbloquear Rota</button>
@@ -524,6 +537,11 @@
     </div>
 
     <div id="logBox" class="log-box">
+=======
+    </div>
+
+     <div id="logBox" class="log-box">
+>>>>>>> 9e2cd45d60b08cf367bd55f73d16178a5dd3e41e
         <b>Logs do sistema</b>
         <div id="logContent"></div>
     </div>
@@ -599,6 +617,7 @@
         </div>
     </div>
 
+<<<<<<< HEAD
     <!-- Modal para bloquear rota -->
     <div id="blockRouteModal" class="modal">
         <div class="modal-content">
@@ -708,6 +727,8 @@
         </div>
     </div>
 
+=======
+>>>>>>> 9e2cd45d60b08cf367bd55f73d16178a5dd3e41e
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
         // Configuração inicial
@@ -1635,6 +1656,7 @@
         window.addEventListener('beforeunload', function () {
             stopTracking();
         });
+<<<<<<< HEAD
 
         function showBlockRouteModal() {
             document.getElementById('blockRouteModal').style.display = 'block';
@@ -1778,6 +1800,8 @@
 
             alert(msg);
         }
+=======
+>>>>>>> 9e2cd45d60b08cf367bd55f73d16178a5dd3e41e
     </script>
 
 </body>

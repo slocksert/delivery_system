@@ -5,16 +5,26 @@ import asyncio
 import random
 import math
 from datetime import datetime, timedelta, timezone
+<<<<<<< HEAD
+=======
+import networkx as nx
+>>>>>>> 9e2cd45d60b08cf367bd55f73d16178a5dd3e41e
 import osmnx as ox
 import networkx as nx
 import numpy as np
 from scipy.optimize import linear_sum_assignment
+<<<<<<< HEAD
 from typing import Set
+=======
+
+from datetime import datetime, timedelta
+>>>>>>> 9e2cd45d60b08cf367bd55f73d16178a5dd3e41e
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
 from ..services.rede_service import OSMNX_AVAILABLE
 from .rede_service import RedeService, VehiclePosition, DetailedRoute
+<<<<<<< HEAD
 try:
     from src.backend.api.websocket import broadcast_log
 except ImportError:
@@ -23,6 +33,8 @@ except ImportError:
     except ImportError:
         async def broadcast_log(msg: str):
             print(msg)
+=======
+>>>>>>> 9e2cd45d60b08cf367bd55f73d16178a5dd3e41e
 
 # Função utilitária para timestamps brasileiros
 def get_brazilian_timestamp() -> datetime:

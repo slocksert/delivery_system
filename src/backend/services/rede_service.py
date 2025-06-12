@@ -23,10 +23,13 @@ except ImportError:
     print("OSMNX não disponível - funcionalidades de rota real limitadas")
 
 from ..database.sqlite import SQLiteDB
+<<<<<<< HEAD
 import asyncio
 
 async def broadcast_log(msg: str):
     print(msg)
+=======
+>>>>>>> 9e2cd45d60b08cf367bd55f73d16178a5dd3e41e
 
 # Função utilitária para timestamps brasileiros
 def get_brazilian_timestamp() -> datetime:
@@ -35,8 +38,11 @@ def get_brazilian_timestamp() -> datetime:
     brazilian_tz = timezone(timedelta(hours=-3))
     return datetime.now(brazilian_tz)
 
+<<<<<<< HEAD
 
     
+=======
+>>>>>>> 9e2cd45d60b08cf367bd55f73d16178a5dd3e41e
 # Estruturas de dados para WebSocket e rastreamento
 @dataclass
 class VehiclePosition:
@@ -204,6 +210,7 @@ class RedeService:
                 capacidade=edge.get("capacidade", edge.get("capacity", 1))
             ))
         return rede
+<<<<<<< HEAD
     def bloquear_rota(self, rede_id: str, origem_id: str, destino_id: str) -> bool:
         """Simula o bloqueio de uma rota (aresta) entre dois nós."""
         if rede_id not in self.redes_cache:
@@ -251,6 +258,8 @@ class RedeService:
                 clientes_afetados += 1
         print(f"Demanda aumentada em {clientes_afetados} clientes da zona {zona_id}")
         return clientes_afetados
+=======
+>>>>>>> 9e2cd45d60b08cf367bd55f73d16178a5dd3e41e
 
     def criar_rede_schema(self, data: Dict[str, Any]) -> str:
         rede = RedeEntrega()
@@ -1683,7 +1692,11 @@ class RedeService:
                 )
         print(f"✅ Inicializadas {len(rede.veiculos)} posições de veículos para rede {rede_id}")
         # NÃO criar rotas ativas nem iniciar movimento automático aqui!
+<<<<<<< HEAD
         # Demo/test logic must be called explicitly elsewhere if needed.
     
     
 
+=======
+        # Demo/test logic must be called explicitly elsewhere if needed.
+>>>>>>> 9e2cd45d60b08cf367bd55f73d16178a5dd3e41e
