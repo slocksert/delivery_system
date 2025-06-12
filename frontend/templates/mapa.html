@@ -727,13 +727,11 @@
                             iconAnchor: [7, 7]
                         });
                        
-                        const demanda = Number(cliente.demanda);
-                        const prioridade = Number(cliente.prioridade);
+                        const demanda = Number(node.demand);
                         const marker = L.marker(node.coordinates, { icon }).addTo(map);
                         marker.bindPopup(`
                             <b>Cliente: ${node.id}</b><br>
                             Demanda: ${demanda}<br>
-                            Prioridade: ${prioridade}
                         `);
                         clientes.set(node.id, marker);
                     }
