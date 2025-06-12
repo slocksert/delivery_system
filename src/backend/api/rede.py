@@ -83,6 +83,9 @@ async def gerar_rede_maceio_alias(
             data={"rede_id": rede_id}
         )
     except Exception as e:
+        import traceback
+        print("\n❌ Traceback completo ao gerar rede de Maceió:")
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erro ao gerar rede de Maceió: {str(e)}"
@@ -377,7 +380,7 @@ async def obter_rede_completa(
                     'id': node['id'],
                     'latitude': node['latitude'],
                     'longitude': node['longitude'],
-                    'demanda_media': node.get('demanda', 10),
+                    'demanda_media': node.get('demanda'),
                     'prioridade': node.get('prioridade', 'normal'),
                     'zona_id': node.get('zona_id', 1)
                 })

@@ -74,9 +74,7 @@ class ConnectionManager:
         
         for conn in inactive_connections:
             self.active_connections[rede_id].discard(conn)
-            
-        print(f"🧹 Removidas {len(inactive_connections)} conexões inativas da rede {rede_id}")
-        
+                    
         # Se não há mais conexões após limpeza, desativar broadcast
         if len(self.active_connections[rede_id]) == 0:
             self.broadcasting[rede_id] = False

@@ -139,7 +139,8 @@ class RedeService:
                     latitude=node["latitude"],
                     longitude=node["longitude"],
                     capacidade=node.get("capacidade", 100),
-                    nome=node["nome"]
+                    nome=node["nome"],
+                    endereco=node.get("endereco", '')
                 ))
             elif node["tipo"] == "zona":
                 rede.zonas.append(ZonaEntrega(
@@ -186,11 +187,15 @@ class RedeService:
                     condutor=node.get("condutor", "")
                 ))
         for edge in data.get("edges", []):
+            origem = edge.get("origem", edge.get("source"))
+            destino = edge.get("destino", edge.get("target"))
+            if origem is None or destino is None:
+                continue  # Ignora arestas inválidas
             rede.rotas.append(Rota(
-                origem=edge["origem"],
-                destino=edge["destino"],
+                origem=origem,
+                destino=destino,
                 peso=edge.get("peso", edge.get("distancia", 1.0)),
-                capacidade=edge["capacidade"]
+                capacidade=edge.get("capacidade", edge.get("capacity", 1))
             ))
         return rede
 
@@ -214,7 +219,8 @@ class RedeService:
                     latitude=node_data['latitude'],
                     longitude=node_data['longitude'],
                     capacidade=node_data.get('capacidade', 100),
-                    nome=node_data['nome']
+                    nome=node_data['nome'],
+                    endereco=node_data.get('endereco', '')
                 )
                 rede.hubs.append(hub)
                 
@@ -327,7 +333,6 @@ class RedeService:
                 "longitude": deposito.longitude,
                 "capacity": deposito.capacidade_maxima
             })
-        
         for hub in rede.hubs:
             todos_nos.append({
                 "id": hub.id,
@@ -336,9 +341,9 @@ class RedeService:
                 "type": "hub",  # Frontend expects 'type' field
                 "latitude": hub.latitude,
                 "longitude": hub.longitude,
-                "capacity": hub.capacidade
+                "capacity": hub.capacidade,
+                "endereco": getattr(hub, 'endereco', '')
             })
-        
         for cliente in rede.clientes:
             todos_nos.append({
                 "id": cliente.id,
@@ -350,7 +355,6 @@ class RedeService:
                 "demand": cliente.demanda_media,
                 "priority": cliente.prioridade.name if hasattr(cliente.prioridade, 'name') else str(cliente.prioridade)
             })
-        
         for zona in rede.zonas:
             # For zones, we'll use a central point or the first hub's location
             lat, lon = -9.65, -35.72  # Default to Maceió center
@@ -845,15 +849,30 @@ class RedeService:
         return position
     
     def obter_todas_posicoes_veiculos(self, rede_id: Optional[str] = None) -> List[VehiclePosition]:
-        """Obtém todas as posições de veículos, opcionalmente filtradas por rede"""
+        """Obtém todas as posições de veículos, opcionalmente filtradas por rede.
+        Veículos com status 'idle' e sem cliente atribuído não são retornados (somem do mapa).
+        """
         positions = list(self.vehicle_positions.values())
-        
+
+        # Filtro por rede, se fornecido
         if rede_id and rede_id in self.redes_cache:
-            # Filtrar apenas veículos da rede especificada
             rede = self.redes_cache[rede_id]
             vehicle_ids = {v.id for v in rede.veiculos}
             positions = [p for p in positions if p.vehicle_id in vehicle_ids]
-        
+
+        # Filtro para sumir veículos 'idle' sem cliente
+        def is_active_or_waiting(p: VehiclePosition) -> bool:
+            if p.status != "idle":
+                return True
+            # Consultar estado de movimento para saber se tem cliente atribuído
+            movement_service = getattr(self, 'movement_service', None)
+            if movement_service and hasattr(movement_service, 'vehicle_states'):
+                state = movement_service.vehicle_states.get(p.vehicle_id)
+                if state and getattr(state, 'current_client_id', None):
+                    return True  # Está idle mas aguardando cliente
+            return False  # Idle e sem cliente: some do mapa
+
+        positions = [p for p in positions if is_active_or_waiting(p)]
         return positions
     
     def calcular_rota_detalhada(self, origin_lat: float, origin_lon: float, 
@@ -1046,6 +1065,24 @@ class RedeService:
         
         if not hub_coords:
             return []
+
+         # Remover clientes já atendidos
+        clientes_atendidos = set()
+
+        # Verifica se há controle de clientes atendidos no VehicleMovementService
+        if hasattr(self, 'vehicle_movement_service'):
+            clientes_atendidos = self.vehicle_movement_service.clientes_atendidos.get(rede_id, set())
+
+        # Filtrar os clientes disponíveis
+        clientes_ids = [
+            cid for cid in clientes_ids
+            if cid not in clientes_atendidos
+        ]
+
+        if not clientes_ids:
+            print(f"✅ Todos os clientes da rede {rede_id} já foram atendidos.")
+            return []
+   
         
         # Otimização simples: ordenar clientes por distância do hub
         clientes_coords = []
@@ -1312,7 +1349,6 @@ class RedeService:
         for vehicle_id in old_positions:
             del self.vehicle_positions[vehicle_id]
         
-        print(f"Limpeza automática: removidas {len(old_positions)} posições antigas")
     
     # Métodos para demonstração e simulação
     def simular_rastreamento_veiculo(self, vehicle_id: str, route_id: str) -> List[VehiclePosition]:
@@ -1503,7 +1539,8 @@ class RedeService:
                 "type": "hub", 
                 "coordinates": [hub.latitude, hub.longitude],
                 "name": hub.nome,
-                "capacity": hub.capacidade
+                "capacity": hub.capacidade,
+                "endereco": getattr(hub, 'endereco', '')
             })
         
         for cliente in rede.clientes:
@@ -1563,17 +1600,13 @@ class RedeService:
         }
     
     def _inicializar_posicoes_veiculos(self, rede_id: str, rede: RedeEntrega):
-        """Inicializa posições de veículos nos seus hubs base e cria algumas rotas ativas"""
+        """Inicializa posições de veículos nos seus hubs base (sem rotas ou movimento)."""
         import random
-        from datetime import datetime, timedelta
-        
         # Verificar se já temos posições para esta rede
         existing_positions = self.obter_todas_posicoes_veiculos(rede_id)
         if existing_positions:
             return  # Já inicializado
-        
-        print(f"🚗 Inicializando posições de {len(rede.veiculos)} veículos para rede {rede_id}...")
-        
+
         # Inicializar posições dos veículos nos seus hubs base
         for veiculo in rede.veiculos:
             # Encontrar o hub base
@@ -1582,189 +1615,18 @@ class RedeService:
                 if hub.id == veiculo.hub_base:
                     hub_base = hub
                     break
-            
             if hub_base:
                 # Adicionar pequena variação aleatória para simular veículos próximos mas não exatamente no mesmo local
                 lat_variation = random.uniform(-0.001, 0.001)  # ~100m de variação
                 lon_variation = random.uniform(-0.001, 0.001)
-                
-                # Status aleatório para simular operação
-                statuses = ["idle", "moving", "delivering"]
-                weights = [60, 30, 10]  # Mais veículos idle
-                status = random.choices(statuses, weights=weights, k=1)[0]
-                
-                # Velocidade baseada no status
-                if status == "idle":
-                    speed = 0
-                elif status == "moving":
-                    speed = random.uniform(15, 35)
-                else:  # delivering
-                    speed = random.uniform(5, 15)
-                
-                # Direção aleatória
-                heading = random.uniform(0, 360)
-                
-                # Criar posição inicial
                 self.atualizar_posicao_veiculo(
                     vehicle_id=veiculo.id,
                     latitude=hub_base.latitude + lat_variation,
                     longitude=hub_base.longitude + lon_variation,
-                    speed=speed,
-                    heading=heading,
-                    status=status
+                    speed=0.0,
+                    heading=random.uniform(0, 360),
+                    status="idle"
                 )
-        
-        # Criar algumas rotas ativas para veículos "moving" ou "delivering"
-        self._criar_rotas_ativas_demo(rede_id, rede)
-        
         print(f"✅ Inicializadas {len(rede.veiculos)} posições de veículos para rede {rede_id}")
-        
-        # Iniciar movimento automático se serviço disponível (de forma assíncrona)
-        if self.movement_service:
-            try:
-                import asyncio
-                # Criar task para executar em background
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.create_task(self._start_movement_delayed(rede_id))
-                print(f"🚀 Agendado início do movimento automático para rede {rede_id}")
-            except Exception as e:
-                print(f"⚠️ Erro ao agendar movimento automático: {e}")
-    
-    async def _start_movement_delayed(self, rede_id: str):
-        """Inicia movimento com delay para evitar problemas de sincronização"""
-        import asyncio
-        try:
-            await asyncio.sleep(1)  # Pequeno delay
-            if self.movement_service:
-                await self.movement_service.start_automatic_movement(rede_id)
-                print(f"🚀 Movimento automático iniciado para rede {rede_id}")
-        except Exception as e:
-            print(f"⚠️ Erro ao iniciar movimento automático: {e}")
-    
-    def _criar_rotas_ativas_demo(self, rede_id: str, rede: RedeEntrega):
-        """Cria algumas rotas ativas de demonstração"""
-        import random
-        
-        # Pegar alguns veículos que estão "moving" ou "delivering"
-        veiculos_ativos = []
-        for veiculo in rede.veiculos:
-            position = self.obter_posicao_veiculo(veiculo.id)
-            if position and position.status in ["moving", "delivering"]:
-                veiculos_ativos.append(veiculo)
-        
-        # Limitar a 3-5 veículos ativos para demonstração
-        veiculos_ativos = veiculos_ativos[:random.randint(3, min(5, len(veiculos_ativos)))]
-        
-        for veiculo in veiculos_ativos:
-            # Encontrar hub base
-            hub_base = None
-            for hub in rede.hubs:
-                if hub.id == veiculo.hub_base:
-                    hub_base = hub
-                    break
-            
-            if not hub_base:
-                continue
-            
-            # Selecionar alguns clientes aleatórios para criar rota
-            clientes_disponiveis = random.sample(rede.clientes, min(3, len(rede.clientes)))
-            cliente_ids = [c.id for c in clientes_disponiveis]
-            
-            # Gerar rotas otimizadas para este veículo
-            rotas = self.obter_rotas_otimizadas_para_veiculo(rede_id, veiculo.id, cliente_ids)
-            
-            if rotas:
-                print(f"🛣️ Criadas {len(rotas)} rotas ativas para veículo {veiculo.id}")
-                
-                # Simular progresso aleatório na primeira rota
-                primeira_rota = rotas[0]
-                progresso = random.uniform(10, 80)  # 10% a 80% completo
-                
-                # Atualizar posição do veículo baseado no progresso da rota
-                new_position = self.simular_movimento_veiculo(
-                    veiculo.id, 
-                    primeira_rota.route_id, 
-                    progresso
-                )
-                
-                if new_position:
-                    print(f"📍 Veículo {veiculo.id} posicionado em {progresso:.1f}% da rota {primeira_rota.route_id}")
-    
-    # Métodos de integração com VehicleMovementService
-    
-    def start_vehicle_movement(self, rede_id: Optional[str] = None) -> bool:
-        """Inicia o movimento automático de veículos"""
-        if not self.movement_service:
-            return False
-        
-        try:
-            # Se rede_id não especificado, usar primeira rede disponível
-            if not rede_id and self.redes_cache:
-                rede_id = list(self.redes_cache.keys())[0]
-            
-            if not rede_id:
-                return False
-            
-            # Iniciar movimento assíncrono
-            import asyncio
-            try:
-                # Tentar obter loop existente
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # Loop já rodando - criar task
-                    loop.create_task(self.movement_service.start_automatic_movement(rede_id))
-                else:
-                    # Loop não rodando - executar diretamente
-                    loop.run_until_complete(self.movement_service.start_automatic_movement(rede_id))
-            except RuntimeError:
-                # Criar novo loop
-                asyncio.run(self.movement_service.start_automatic_movement(rede_id))
-            
-            return True
-        except Exception as e:
-            print(f"Erro ao iniciar movimento de veículos: {e}")
-            return False
-    
-    def stop_vehicle_movement(self) -> bool:
-        """Para o movimento automático de veículos"""
-        if not self.movement_service:
-            return False
-        
-        try:
-            self.movement_service.stop_automatic_movement()
-            return True
-        except Exception as e:
-            print(f"Erro ao parar movimento de veículos: {e}")
-            return False
-    
-    def get_movement_statistics(self) -> Dict[str, Any]:
-        """Obtém estatísticas do movimento de veículos"""
-        if not self.movement_service:
-            return {
-                "error": "Serviço de movimento não disponível",
-                "total_vehicles": len(self.vehicle_positions),
-                "active_vehicles": 0,
-                "active_routes": len(self.detailed_routes)
-            }
-        
-        try:
-            # Obter estatísticas do serviço de movimento
-            movement_stats = self.movement_service.get_movement_statistics()
-            
-            # Combinar com estatísticas locais
-            stats = {
-                "total_vehicles": movement_stats.get("total_vehicles", len(self.vehicle_positions)),
-                "active_vehicles": movement_stats.get("active_vehicles", 0),
-                "vehicles_by_status": {},
-                "active_routes": movement_stats.get("total_routes", len(self.detailed_routes)),
-                "movement_service_running": movement_stats.get("is_running", False)
-            }
-            
-            # Estatísticas detalhadas por status
-            for status in ['idle', 'moving', 'delivering', 'returning']:
-                stats["vehicles_by_status"][status] = movement_stats.get(status, 0)
-            
-            return stats
-        except Exception as e:
-            return {"error": f"Erro ao obter estatísticas: {e}"}
+        # NÃO criar rotas ativas nem iniciar movimento automático aqui!
+        # Demo/test logic must be called explicitly elsewhere if needed.

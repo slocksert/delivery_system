@@ -56,9 +56,7 @@ class GeradorMaceioCompleto:
                 
                 # Obter limites geográficos
                 self.boundaries = ox.geocode_to_gdf(lugar)
-                
-                print(f"Mapa carregado: {len(self.grafo_maceio.nodes)} nós, {len(self.grafo_maceio.edges)} arestas")
-                
+                                
                 # Adicionar informações de velocidade e tempo
                 self.grafo_maceio = ox.add_edge_speeds(self.grafo_maceio)
                 self.grafo_maceio = ox.add_edge_travel_times(self.grafo_maceio)
@@ -290,10 +288,10 @@ class GeradorMaceioCompleto:
             zona_id = self._determinar_zona_por_coordenada(lat, lon)
             
             # Gerar características do cliente
-            demanda = random.choice([1, 1, 2, 2, 3, 4, 5])  # Mais peso para demandas baixas
+            demanda = random.choices([1, 2, 3], weights=[50, 35, 15], k=1)[0]  # 1 e 2 mais prováveis
             prioridade = random.choices(
-                list(PrioridadeCliente),
-                weights=[5, 70, 20, 4, 1],  # Maioria normal
+                [PrioridadeCliente.ALTA, PrioridadeCliente.NORMAL],
+                weights=[50, 50],  # 2 (NORMAL) mais provável
                 k=1
             )[0]
             
@@ -373,10 +371,10 @@ class GeradorMaceioCompleto:
                 zona_id = self._determinar_zona_por_coordenada(lat, lon)
                 
                 # Gerar características do cliente
-                demanda = random.choice([1, 1, 2, 2, 3, 4, 5])  # Mais peso para demandas baixas
+                demanda = random.choices([1, 2, 3], weights=[50, 35, 15], k=1)[0]  # 1 e 2 mais prováveis
                 prioridade = random.choices(
-                    list(PrioridadeCliente),
-                    weights=[5, 70, 20, 4, 1],  # Maioria normal
+                    [PrioridadeCliente.ALTA, PrioridadeCliente.NORMAL],
+                    weights=[30, 70],  # 2 (NORMAL) mais provável
                     k=1
                 )[0]
                 
@@ -396,7 +394,6 @@ class GeradorMaceioCompleto:
         # Completar com clientes restantes se necessário (distribuição aleatória)
         while len(clientes) < num_clientes:
             zona_aleatoria = random.choice([zona for zona, _ in distribuicao_zonas])
-            
             # Gerar coordenadas baseadas na zona aleatória
             if zona_aleatoria == 'centro':
                 lat = -9.6500 + random.uniform(-0.02, 0.02)
@@ -413,19 +410,22 @@ class GeradorMaceioCompleto:
             else:  # leste
                 lat = -9.7000 + random.uniform(-0.02, 0.02)
                 lon = -35.7350 + random.uniform(-0.02, 0.02)
-            
             zona_id = self._determinar_zona_por_coordenada(lat, lon)
-            
+            demanda = random.choices([1, 2, 3], weights=[50, 35, 15], k=1)[0]
+            prioridade = random.choices(
+                [PrioridadeCliente.ALTA, PrioridadeCliente.NORMAL],
+                weights=[30, 70],
+                k=1
+            )[0]
             cliente = Cliente(
                 id=f"CLI_{cliente_id:04d}",
                 latitude=lat,
                 longitude=lon,
-                demanda_media=random.choice([1, 2, 3]),
-                prioridade=PrioridadeCliente.NORMAL,
+                demanda_media=demanda,
+                prioridade=prioridade,
                 endereco=f"Endereço {cliente_id}, {zona_id.replace('ZONA_', '')}",
                 zona_id=zona_id
             )
-            
             clientes.append(cliente)
             cliente_id += 1
         
@@ -484,27 +484,62 @@ class GeradorMaceioCompleto:
             # Fallback para método sintético
             return self._gerar_rotas_sinteticas(depositos, hubs, clientes, zonas)
         
-        # Por enquanto, usar métodos sintéticos até resolver problemas de compatibilidade OSMNX
-        print("Usando rotas sintéticas como fallback devido a problemas de compatibilidade OSMNX")
-        return self._gerar_rotas_sinteticas(depositos, hubs, clientes, zonas)
+        # 1. Rotas: Depósitos → Hubs
+        rotas.extend(self._rotas_depositos_hubs(depositos, hubs))
+        # 2. Rotas: Hubs ↔ Hubs (redistribuição)
+        rotas.extend(self._rotas_hubs_hubs(hubs))
+        # 3. Rotas: Hubs → Clientes (essencial para delivery)
+        rotas.extend(self._rotas_hubs_clientes(hubs, clientes))
+        # 4. Rotas: Hubs → Zonas (agregação)
+        rotas.extend(self._rotas_hubs_zonas(hubs, zonas))
+        # Validação extra: garantir que cada cliente tem pelo menos uma rota de entrega
+        clientes_com_rota = set(r.destino for r in rotas if r.destino.startswith('CLI_'))
+        for cliente in clientes:
+            if cliente.id not in clientes_com_rota:
+                # Conectar cliente ao hub mais próximo
+                hub_mais_proximo = min(hubs, key=lambda h: self._calcular_distancia(h.latitude, h.longitude, cliente.latitude, cliente.longitude))
+                dist = self._calcular_distancia(hub_mais_proximo.latitude, hub_mais_proximo.longitude, cliente.latitude, cliente.longitude)
+                rotas.append(Rota(
+                    origem=hub_mais_proximo.id,
+                    destino=cliente.id,
+                    peso=dist * 111,
+                    capacidade=10,
+                    tipo_rota="entrega_final",
+                    tempo_medio=dist * 3,
+                    custo=dist * 2,
+                    ativa=True
+                ))
+        return rotas
     
     def _gerar_rotas_sinteticas(self, depositos: List[Deposito], hubs: List[Hub],
                                clientes: List[Cliente], zonas: List[ZonaEntrega]) -> List[Rota]:
-        """Gera rotas usando método sintético (fallback)"""
+        """Gera rotas usando método sintético (fallback) garantindo rede completa"""
         rotas = []
-        
         # 1. Rotas: Depósitos → Hubs
         rotas.extend(self._rotas_depositos_hubs(depositos, hubs))
-        
         # 2. Rotas: Hubs ↔ Hubs (redistribuição)
         rotas.extend(self._rotas_hubs_hubs(hubs))
-        
-        # 3. Rotas: Hubs → Clientes (NOVA - essencial para delivery)
+        # 3. Rotas: Hubs → Clientes (essencial para delivery)
         rotas.extend(self._rotas_hubs_clientes(hubs, clientes))
-        
         # 4. Rotas: Hubs → Zonas (agregação)
         rotas.extend(self._rotas_hubs_zonas(hubs, zonas))
-        
+        # Validação extra: garantir que cada cliente tem pelo menos uma rota de entrega
+        clientes_com_rota = set(r.destino for r in rotas if r.destino.startswith('CLI_'))
+        for cliente in clientes:
+            if cliente.id not in clientes_com_rota:
+                # Conectar cliente ao hub mais próximo
+                hub_mais_proximo = min(hubs, key=lambda h: self._calcular_distancia(h.latitude, h.longitude, cliente.latitude, cliente.longitude))
+                dist = self._calcular_distancia(hub_mais_proximo.latitude, hub_mais_proximo.longitude, cliente.latitude, cliente.longitude)
+                rotas.append(Rota(
+                    origem=hub_mais_proximo.id,
+                    destino=cliente.id,
+                    peso=dist * 111,
+                    capacidade=10,
+                    tipo_rota="entrega_final",
+                    tempo_medio=dist * 3,
+                    custo=dist * 2,
+                    ativa=True
+                ))
         return rotas
     
     # Métodos de rota sintéticos (fallback)
@@ -622,7 +657,7 @@ class GeradorMaceioCompleto:
     def _gerar_veiculos(self, hubs: List[Hub], num_entregadores: Optional[int] = None) -> List[Veiculo]:
         """Gera frota de veículos distribuída pelos hubs"""
         if num_entregadores is None:
-            num_entregadores = max(5, len(hubs) * 2)  # 2 veículos por hub mínimo
+            num_entregadores = max(6, len(hubs) * 1)  # 2 veículos por hub mínimo
         
         veiculos = []
         tipos_veiculo = [TipoVeiculo.MOTO, TipoVeiculo.VAN, TipoVeiculo.CAMINHAO]

@@ -5,9 +5,17 @@ import asyncio
 import random
 import math
 from datetime import datetime, timedelta, timezone
+import networkx as nx
+import osmnx as ox
+import networkx as nx
+import numpy as np
+from scipy.optimize import linear_sum_assignment
+
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
+from ..services.rede_service import OSMNX_AVAILABLE
 from .rede_service import RedeService, VehiclePosition, DetailedRoute
 
 # Função utilitária para timestamps brasileiros
@@ -45,6 +53,8 @@ class VehicleMovementService:
         self.vehicle_states: Dict[str, VehicleMovementState] = {}
         self.is_running = False
         self.update_interval = 1.0  # segundos entre atualizações (mais frequente)
+        self.clientes_atendidos: Dict[str, Set[str]] = {}
+
         
     async def start_automatic_movement(self, rede_id: str):
         """Inicia movimentação automática para todos os veículos de uma rede."""
@@ -52,7 +62,6 @@ class VehicleMovementService:
             return
         
         self.is_running = True
-        print(f"🚀 Iniciando movimentação automática para rede {rede_id}")
         
         # Inicializar estados dos veículos
         await self._initialize_vehicle_states(rede_id)
@@ -63,62 +72,54 @@ class VehicleMovementService:
     def stop_automatic_movement(self):
         """Para a movimentação automática."""
         self.is_running = False
-        print("⏹️ Movimentação automática interrompida")
+        print("⏹️ Rastreamento interrompido")
     
     async def _initialize_vehicle_states(self, rede_id: str):
-        """Inicializa estados de movimento dos veículos."""
-        
+        """Inicializa estados de movimento dos veículos: cada veículo pega o cliente mais próximo disponível (matching guloso sequencial)."""
+        self.vehicle_states = {}
         if rede_id not in self.rede_service.redes_cache:
             return
-        
         rede = self.rede_service.redes_cache[rede_id]
-        
+        demanda_restante = {c.id: getattr(c, 'demanda_media', getattr(c, 'demanda', 1)) for c in rede.clientes}
+        clientes_disponiveis = [c for c in rede.clientes if demanda_restante[c.id] > 0]
+        veiculos_livres = [v for v in rede.veiculos]
+        clientes_atribuidos = set()
+        atribuicoes = {}
+        for vehicle in veiculos_livres:
+            hub = next((h for h in rede.hubs if h.id == vehicle.hub_base), None)
+            if not hub:
+                continue
+            # Ordena clientes disponíveis por distância ao hub do veículo
+            clientes_ordenados = sorted(
+                [c for c in clientes_disponiveis if c.id not in clientes_atribuidos],
+                key=lambda c: self._calculate_distance(hub.latitude, hub.longitude, c.latitude, c.longitude)
+            )
+            if clientes_ordenados:
+                cliente_mais_proximo = clientes_ordenados[0]
+                atribuicoes[vehicle.id] = cliente_mais_proximo
+                clientes_atribuidos.add(cliente_mais_proximo.id)
+        clientes_em_atendimento = set(clientes_atribuidos)
         for vehicle in rede.veiculos:
-            # Verificar se já tem posição
-            position = self.rede_service.obter_posicao_veiculo(vehicle.id)
-            
-            if position:
-                # Determinar status inicial baseado na posição atual
-                if position.status == "moving" and position.speed > 5:
-                    # Veículo em movimento - tentar encontrar rota ativa
-                    route_id = self._find_active_route_for_vehicle(vehicle.id)
-                    if route_id:
-                        # Calcular progresso atual na rota
-                        progress = self._calculate_current_progress(vehicle.id, route_id)
-                        self.vehicle_states[vehicle.id] = VehicleMovementState(
-                            vehicle_id=vehicle.id,
-                            route_id=route_id,
-                            progress_percent=progress,
-                            status="moving",
-                            last_update=get_brazilian_timestamp(),
-                            movement_speed=random.uniform(8.0, 15.0)  # % por minuto (velocidade mais alta)
-                        )
-                    else:
-                        # Criar nova rota para veículo em movimento
-                        await self._assign_new_route(rede_id, vehicle.id)
-                elif position.status == "delivering":
-                    # Veículo entregando - pausar por um tempo
-                    self.vehicle_states[vehicle.id] = VehicleMovementState(
-                        vehicle_id=vehicle.id,
-                        status="delivering",
-                        last_update=get_brazilian_timestamp(),
-                        pause_until=get_brazilian_timestamp() + timedelta(minutes=random.randint(5, 15))
-                    )
-                else:
-                    # Veículo idle - decidir se deve sair para entrega
-                    if random.random() < 0.3:  # 30% chance de sair
-                        await self._assign_new_route(rede_id, vehicle.id)
-                    else:
-                        self.vehicle_states[vehicle.id] = VehicleMovementState(
-                            vehicle_id=vehicle.id,
-                            status="idle",
-                            last_update=get_brazilian_timestamp()
-                        )
+            if vehicle.id in atribuicoes:
+                cliente = atribuicoes[vehicle.id]
+                self.vehicle_states[vehicle.id] = VehicleMovementState(
+                    vehicle_id=vehicle.id,
+                    route_id=None,
+                    progress_percent=0.0,
+                    status="moving",
+                    last_update=get_brazilian_timestamp(),
+                    movement_speed=random.uniform(8.0, 15.0),
+                    current_client_id=cliente.id
+                )
+                await self._assign_new_route(rede_id, vehicle.id)
             else:
-                # Criar posição inicial se não existe
-                await self._create_initial_position(rede_id, vehicle)
-        
-        print(f"✅ Estados inicializados para {len(self.vehicle_states)} veículos")
+                self.vehicle_states[vehicle.id] = VehicleMovementState(
+                    vehicle_id=vehicle.id,
+                    status="idle",
+                    last_update=get_brazilian_timestamp()
+                )
+        self.demanda_restante = demanda_restante
+        self.clientes_em_atendimento = clientes_em_atendimento
     
     def _find_active_route_for_vehicle(self, vehicle_id: str) -> Optional[str]:
         """Encontra rota ativa para um veículo."""
@@ -158,66 +159,123 @@ class VehicleMovementService:
         return 0.0
     
     async def _assign_new_route(self, rede_id: str, vehicle_id: str):
-        """Atribui nova rota para um veículo."""
+        """Atribui uma nova rota para um veículo idle usando matching guloso (greedy):
+        o veículo escolhe o cliente de maior prioridade mais próximo do seu hub."""
         try:
             rede = self.rede_service.redes_cache[rede_id]
-            
-            # Selecionar clientes aleatórios para visitar
-            if rede.clientes:
-                # Selecionar alguns clientes aleatórios para visitar
-                num_clients = random.randint(1, min(3, len(rede.clientes)))
-                selected_clients = random.sample(rede.clientes, num_clients)
-                client_ids = [c.id for c in selected_clients]
-                
-                # Gerar rotas otimizadas
+            demanda_restante = getattr(self, 'demanda_restante', None)
+            if demanda_restante is None:
+                demanda_restante = {c.id: getattr(c, 'demanda_media', getattr(c, 'demanda', 1)) for c in rede.clientes}
+            clientes_em_atendimento = getattr(self, 'clientes_em_atendimento', set())
+            vehicle = next((v for v in rede.veiculos if v.id == vehicle_id), None)
+            if not vehicle:
+                return
+            hub = next((h for h in rede.hubs if h.id == vehicle.hub_base), None)
+            if not hub:
+                return
+            # Filtrar clientes disponíveis (demanda > 0 e não em atendimento)
+            clientes_disponiveis = [c for c in rede.clientes if demanda_restante.get(c.id, 0) > 0 and c.id not in clientes_em_atendimento]
+            if not clientes_disponiveis:
+                return
+            # Selecionar clientes de maior prioridade
+            prioridade_min = min(getattr(c.prioridade, 'value', c.prioridade) for c in clientes_disponiveis)
+            candidatos_prioridade = [c for c in clientes_disponiveis if getattr(c.prioridade, 'value', c.prioridade) == prioridade_min]
+            # Escolher o cliente mais próximo do hub do veículo
+            melhor_cliente = None
+            melhor_dist = float('inf')
+            for cliente in candidatos_prioridade:
+                dist = self._calculate_distance(hub.latitude, hub.longitude, cliente.latitude, cliente.longitude)
+                if dist < melhor_dist:
+                    melhor_dist = dist
+                    melhor_cliente = cliente
+            if melhor_cliente:
+                clientes_em_atendimento.add(melhor_cliente.id)
+                self.demanda_restante = demanda_restante
+                self.clientes_em_atendimento = clientes_em_atendimento
+                client_ids = [melhor_cliente.id]
                 routes = self.rede_service.obter_rotas_otimizadas_para_veiculo(
-                    rede_id, vehicle_id, client_ids
+                    rede_id, vehicle.id, client_ids
                 )
-                
-                if routes:
-                    # Usar primeira rota
+                if routes and client_ids[0] is not None:
                     first_route = routes[0]
-                    
-                    # Criar estado de movimento
-                    self.vehicle_states[vehicle_id] = VehicleMovementState(
-                        vehicle_id=vehicle_id,
+                    self.vehicle_states[vehicle.id] = VehicleMovementState(
+                        vehicle_id=vehicle.id,
                         route_id=first_route.route_id,
                         progress_percent=0.0,
                         status="moving",
                         last_update=get_brazilian_timestamp(),
-                        movement_speed=random.uniform(10.0, 20.0),  # % por minuto (velocidade alta)
+                        movement_speed=random.uniform(10.0, 20.0),
                         target_progress=100.0,
-                        current_client_id=client_ids[0]  # Primeiro cliente da rota
+                        current_client_id=client_ids[0]
                     )
-                    
-                    print(f"🛣️ Nova rota atribuída ao veículo {vehicle_id}: {first_route.route_id} -> Cliente {client_ids[0]}")
+                    print(f"🛣️ Veículo {vehicle.id}: {first_route.route_id} -> Cliente {client_ids[0]} (demanda restante: {demanda_restante[client_ids[0]]})")
                 else:
-                    # Não conseguiu criar rota - manter idle
-                    self.vehicle_states[vehicle_id] = VehicleMovementState(
-                        vehicle_id=vehicle_id,
+                    self.vehicle_states[vehicle.id] = VehicleMovementState(
+                        vehicle_id=vehicle.id,
                         status="idle",
                         last_update=get_brazilian_timestamp()
                     )
+                    print(f"⚠️Não foi possível criar rota válida para o veículo {vehicle.id}, ficará idle.")
         except Exception as e:
-            print(f"❌ Erro ao atribuir rota para veículo {vehicle_id}: {e}")
-    
+            print(f"❌ Erro no matching guloso dinâmico: {e}")
+
+    async def _assign_global_optimal_routes(self, rede_id: str):
+        """(Desativado) Não usar matching ótimo, apenas guloso."""
+        return
+
+    async def _maybe_assign_new_routes(self, rede_id: str):
+        """Atribui novas rotas para veículos idle usando matching guloso."""
+        idle_vehicles = [
+            vehicle_id for vehicle_id, state in self.vehicle_states.items()
+            if state.status == "idle" and (not state.pause_until or get_brazilian_timestamp() >= state.pause_until)
+        ]
+        for vehicle_id in idle_vehicles:
+            await self._assign_new_route(rede_id, vehicle_id)
+
     async def _create_initial_position(self, rede_id: str, vehicle):
         """Cria posição inicial para um veículo em seu hub base."""
         try:
             rede = self.rede_service.redes_cache[rede_id]
-            
+
             # Encontrar hub base
             hub_base = None
             for hub in rede.hubs:
                 if hub.id == vehicle.hub_base:
                     hub_base = hub
                     break
-            
+
             if hub_base:
-                # Criar posição próxima ao hub
-                lat_variation = random.uniform(-0.001, 0.001)
-                lon_variation = random.uniform(-0.001, 0.001)
-                
+                # Usar o nó mais próximo na rede real como posição inicial
+                G = self.rede_service.real_network_graph
+                if G is not None and hasattr(ox, 'distance'):
+                    try:
+                        nearest_node = ox.distance.nearest_nodes(G, hub_base.longitude, hub_base.latitude)
+                        node_data = G.nodes[nearest_node]
+
+                        self.rede_service.atualizar_posicao_veiculo(
+                            vehicle_id=vehicle.id,
+                            latitude=node_data['y'],
+                            longitude=node_data['x'],
+                            speed=0.0,
+                            heading=random.uniform(0, 360),
+                            status="idle"
+                        )
+
+                        self.vehicle_states[vehicle.id] = VehicleMovementState(
+                            vehicle_id=vehicle.id,
+                            status="idle",
+                            last_update=datetime.now()
+                        )
+
+                        return
+
+                    except Exception as e:
+                        print(f"⚠️ Falha ao usar grafo real para veículo {vehicle.id}: {e}")
+
+                # Fallback (caso grafo não exista ou falhe)
+                lat_variation = random.uniform(-0.0002, 0.0002)
+                lon_variation = random.uniform(-0.0002, 0.0002)
+
                 self.rede_service.atualizar_posicao_veiculo(
                     vehicle_id=vehicle.id,
                     latitude=hub_base.latitude + lat_variation,
@@ -226,17 +284,17 @@ class VehicleMovementService:
                     heading=random.uniform(0, 360),
                     status="idle"
                 )
-                
-                # Criar estado idle
+
                 self.vehicle_states[vehicle.id] = VehicleMovementState(
                     vehicle_id=vehicle.id,
                     status="idle",
                     last_update=get_brazilian_timestamp()
                 )
-                
-                print(f"📍 Posição inicial criada para veículo {vehicle.id}")
+
+    
         except Exception as e:
             print(f"❌ Erro ao criar posição inicial para veículo {vehicle.id}: {e}")
+
     
     async def _movement_loop(self, rede_id: str):
         """Loop principal de movimentação dos veículos."""
@@ -263,52 +321,56 @@ class VehicleMovementService:
     async def _update_vehicle_movement(self, rede_id: str, vehicle_id: str, 
                                      state: VehicleMovementState, current_time: datetime):
         """Atualiza movimento de um veículo específico."""
-        
+    
         try:
             # Verificar se veículo está pausado
             if state.pause_until and current_time < state.pause_until:
                 return
+
+            # NOVO: Se estava reabastecendo e o tempo acabou, já tenta nova entrega
+            if state.status == "refueling":
+                if not state.pause_until or current_time >= state.pause_until:
+                    # Tenta atribuir nova rota imediatamente
+                    await self._assign_new_route(rede_id, vehicle_id)
+                    return
             
             # Calcular tempo desde última atualização
             if state.last_update:
                 time_delta = (current_time - state.last_update).total_seconds()
             else:
                 time_delta = self.update_interval
-            
+        
             if state.status == "idle":
                 # Veículo parado - ocasionalmente atribuir nova rota
                 if random.random() < 0.05:  # 5% chance por ciclo
                     await self._assign_new_route(rede_id, vehicle_id)
-            
+        
             elif state.status == "moving" and state.route_id:
                 # Veículo em movimento - atualizar progresso
-                progress_increment = state.movement_speed * (time_delta / 60.0)  # movement_speed já está em % por minuto
+                progress_increment = state.movement_speed * (time_delta / 60.0)  # % por minuto
                 new_progress = min(state.target_progress, state.progress_percent + progress_increment)
-                
+            
                 # Simular movimento ao longo da rota
                 new_position = self.rede_service.simular_movimento_veiculo(
                     vehicle_id, state.route_id, new_progress
                 )
-                
+            
                 if new_position:
                     state.progress_percent = new_progress
-                    
-                    # Adicionar variação de velocidade realística durante o movimento
-                    # A velocidade já vem do simular_movimento_veiculo com variação
-                    # Mas vamos adicionar pequenas flutuações para simular condições de trânsito
+
+                    # Variação realística de velocidade
                     if hasattr(new_position, 'speed') and new_position.speed > 0:
-                        speed_variation = random.uniform(0.8, 1.2)  # ±20% de variação
+                        speed_variation = random.uniform(0.8, 1.2)
                         varied_speed = new_position.speed * speed_variation
                         new_position.speed = max(5.0, min(70.0, varied_speed))
-                    
+                
                     # Verificar se chegou ao destino
                     if new_progress >= state.target_progress:
-                        # Parar para entrega
+                        # Pausar para entrega
                         state.status = "delivering"
-                        delivery_time = random.randint(0, 1)  # 2-5 minutos para entrega
+                        delivery_time = random.randint(0, 1)  # 0–1 min
                         state.pause_until = current_time + timedelta(minutes=delivery_time)
-                        
-                        # Atualizar status do veículo
+
                         self.rede_service.atualizar_posicao_veiculo(
                             vehicle_id=vehicle_id,
                             latitude=new_position.latitude,
@@ -317,255 +379,218 @@ class VehicleMovementService:
                             heading=new_position.heading,
                             status="delivering"
                         )
-                        
+
                         print(f"📦 Veículo {vehicle_id} chegou ao destino e está entregando (tempo estimado: {delivery_time} min)")
-            
+                        # Só adiciona cliente válido
+                        if state.current_client_id is not None:
+                            self.clientes_atendidos.setdefault(rede_id, set()).add(state.current_client_id)
+                            # Remover cliente do set de em atendimento
+                            if hasattr(self, 'clientes_em_atendimento'):
+                                self.clientes_em_atendimento.discard(state.current_client_id)
+                            print(f"✅  O cliente {state.current_client_id} foi atendido.")
+                        else:
+                            print(f"⚠️ Atenção: Veículo {vehicle_id} chegou ao destino mas current_client_id é None. Nenhum cliente será marcado como atendido.")
+
             elif state.status == "delivering":
                 # Veículo entregando - verificar se terminou
                 if not state.pause_until or current_time >= state.pause_until:
-                    
-                    # Sempre voltar ao hub após entrega com movimento real
-                    await self._start_return_to_hub(rede_id, vehicle_id, state, current_time)
-                    
-                    print(f"🔄 Veículo {vehicle_id} iniciando retorno ao hub com movimento contínuo")
-            
+
+                    # Decrementa demanda do cliente entregue
+                    if hasattr(self, 'demanda_restante') and state.current_client_id:
+                        self.demanda_restante[state.current_client_id] -= 1
+
+                    # Obter ponto exato da entrega (último waypoint)
+                    rota_entrega = self.rede_service.detailed_routes.get(state.route_id)
+                    if rota_entrega and rota_entrega.waypoints:
+                        ponto_entrega = rota_entrega.waypoints[-1]
+                    else:
+                        ponto_entrega = self.rede_service.obter_posicao_veiculo(vehicle_id)
+
+                    # Iniciar retorno ao hub a partir da posição de entrega
+                    await self._start_return_to_hub(
+                        rede_id=rede_id,
+                        vehicle_id=vehicle_id,
+                        state=state,
+                        current_time=current_time,
+                        current_position=ponto_entrega
+                    )
+
+                    print(f"🔄 O veículo {vehicle_id} está retornando ao HUB.")
+        
             elif state.status == "returning":
                 # Veículo retornando - movimentar em direção ao hub
                 if state.route_id:
-                    # Usando rota de retorno - atualizar progresso
                     progress_increment = state.movement_speed * (time_delta / 60.0)
                     new_progress = min(100.0, state.progress_percent + progress_increment)
-                    
-                    # Simular movimento de retorno
+
                     new_position = self.rede_service.simular_movimento_veiculo(
                         vehicle_id, state.route_id, new_progress
                     )
-                    
+
                     if new_position:
                         state.progress_percent = new_progress
-                        
-                        # Velocidade de retorno
+
                         if hasattr(new_position, 'speed'):
-                            new_position.speed = random.uniform(30, 50)  # Velocidade de retorno
-                        
-                        # Verificar se chegou ao hub
+                            new_position.speed = random.uniform(30, 50)
+
                         if new_progress >= 100.0:
-                            # Chegou ao hub
                             await self._vehicle_arrived_at_hub(rede_id, vehicle_id, state, current_time)
                 else:
-                    # Sem rota de retorno - usar movimento direto
                     await self._direct_return_to_hub(rede_id, vehicle_id, state, current_time, time_delta)
-            
+
             # Atualizar timestamp
             state.last_update = current_time
-            
+
         except Exception as e:
             print(f"❌ Erro ao atualizar movimento do veículo {vehicle_id}: {e}")
+
     
-    async def _maybe_assign_new_routes(self, rede_id: str):
-        """Ocasionalmente atribui novas rotas para veículos idle."""
-        
-        idle_vehicles = [
-            vehicle_id for vehicle_id, state in self.vehicle_states.items()
-            if state.status == "idle" and (not state.pause_until or get_brazilian_timestamp() >= state.pause_until)
-        ]
-        
-        if idle_vehicles and random.random() < 0.3:  # 30% chance
-            selected_vehicle = random.choice(idle_vehicles)
-            await self._assign_new_route(rede_id, selected_vehicle)
-    
-    def _calculate_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-        """Calcula distância entre duas coordenadas."""
-        return math.sqrt((lat2 - lat1)**2 + (lon2 - lon1)**2)
-    
-    def get_movement_statistics(self) -> Dict:
-        """Obtém estatísticas de movimento dos veículos."""
-        
-        stats = {
-            'total_vehicles': len(self.vehicle_states),
-            'active_vehicles': 0,  # Veículos em movimento ou entregando
-            'idle': 0,
-            'moving': 0,
-            'delivering': 0,
-            'returning': 0,
-            'is_running': self.is_running,
-            'total_routes': len([s for s in self.vehicle_states.values() if s.route_id])
-        }
-        
-        for state in self.vehicle_states.values():
-            stats[state.status] = stats.get(state.status, 0) + 1
-            
-            # Contar veículos ativos (não idle)
-            if state.status in ['moving', 'delivering', 'returning']:
-                stats['active_vehicles'] += 1
-        
-        return stats
-    
-    async def _start_return_to_hub(self, rede_id: str, vehicle_id: str, 
-                                  state: VehicleMovementState, current_time: datetime):
+    async def _start_return_to_hub(self, rede_id: str, vehicle_id: str, state: VehicleMovementState, current_time: datetime, current_position=None):
         """Inicia o retorno do veículo ao hub com movimento real."""
+
+        if current_position is None:
+            current_position = self.rede_service.obter_posicao_veiculo(vehicle_id)
+
         try:
-            rede = self.rede_service.redes_cache[rede_id]
+            rede = self.rede_service.redes_cache.get(rede_id)
+            if not rede:
+                print(f"❌ Rede {rede_id} não encontrada no cache.")
+                return
+
             vehicle = next((v for v in rede.veiculos if v.id == vehicle_id), None)
-            
-            if vehicle:
-                hub_base = next((h for h in rede.hubs if h.id == vehicle.hub_base), None)
-                current_position = self.rede_service.obter_posicao_veiculo(vehicle_id)
-                
-                if hub_base and current_position:
-                    # Criar rota de retorno simples (direta ao hub)
-                    return_route_id = f"{vehicle_id}_return_{int(current_time.timestamp())}"
-                    
-                    # Simular uma rota de retorno
-                    return_route = self._create_return_route(
-                        return_route_id, 
-                        current_position, 
-                        hub_base
-                    )
-                    
-                    if return_route:
-                        # Armazenar a rota
-                        self.rede_service.detailed_routes[return_route_id] = return_route
-                        
-                        # Configurar estado de retorno
-                        state.status = "returning"
-                        state.route_id = return_route_id
-                        state.progress_percent = 0.0
-                        state.current_client_id = None
-                        state.movement_speed = random.uniform(12.0, 18.0)  # Velocidade de retorno
-                        state.pause_until = None
-                        
-                        # Atualizar status do veículo
-                        self.rede_service.atualizar_posicao_veiculo(
-                            vehicle_id=vehicle_id,
-                            latitude=current_position.latitude,
-                            longitude=current_position.longitude,
-                            speed=random.uniform(30, 45),
-                            heading=self._calculate_heading_to_hub(current_position, hub_base),
-                            status="returning"
-                        )
-                        
-                        print(f"🛣️ Rota de retorno criada para veículo {vehicle_id}: {return_route_id}")
-                    else:
-                        # Fallback para movimento direto
-                        await self._setup_direct_return(rede_id, vehicle_id, state, hub_base)
-                        print(f"🔄 Usando retorno direto para veículo {vehicle_id}")
-                else:
-                    print(f"⚠️ Não foi possível encontrar hub base para veículo {vehicle_id}")
-                    
+            if not vehicle:
+                print(f"⚠️ Veículo {vehicle_id} não encontrado na rede {rede_id}")
+                return
+
+            hub_base = next((h for h in rede.hubs if h.id == vehicle.hub_base), None)
+            current_position = self.rede_service.obter_posicao_veiculo(vehicle_id)
+
+            if not hub_base or not current_position:
+                print(f"⚠️ Hub base ou posição atual não encontrados para veículo {vehicle_id}")
+                return
+
+            # Gerar ID único para a rota de retorno
+            return_route_id = f"{vehicle_id}_return_{int(current_time.timestamp())}"
+
+            # Tentar criar rota com grafo real
+            return_route = None
+            try:
+                return_route = self._create_return_route(
+                    return_route_id,
+                    current_position,
+                    hub_base
+                )
+            except Exception as e:
+                print(f"❌ Erro ao criar rota de retorno para {vehicle_id}: {e}")
+
+            if return_route:
+                # Armazenar e configurar retorno com rota real
+                self.rede_service.detailed_routes[return_route_id] = return_route
+
+                state.status = "returning"
+                state.route_id = return_route_id
+                state.progress_percent = 0.0
+                state.current_client_id = None
+                state.movement_speed = random.uniform(12.0, 18.0)
+                state.pause_until = None
+
+                self.rede_service.atualizar_posicao_veiculo(
+                    vehicle_id=vehicle_id,
+                    latitude=current_position.latitude,
+                    longitude=current_position.longitude,
+                    speed=random.uniform(30, 45),
+                    heading=self._calculate_heading_to_hub(current_position, hub_base),
+                    status="returning"
+                )
+
+            else:
+                # Fallback para movimento direto linear (interpolação)
+                await self._setup_direct_return(rede_id, vehicle_id, state, hub_base)
+
         except Exception as e:
-            print(f"❌ Erro ao iniciar retorno ao hub para veículo {vehicle_id}: {e}")
+            print(f"❌ Erro inesperado ao iniciar retorno ao hub para veículo {vehicle_id}: {e}")
+
     
     def _create_return_route(self, route_id: str, current_pos, hub_base):
-        """Cria uma rota simples de retorno ao hub."""
+        """Cria uma rota real de retorno ao hub usando o grafo do OSMnx."""
         from .rede_service import DetailedRoute, RouteWaypoint
-        
+        import networkx as nx
+        import osmnx as ox
+        import math
+
+        def haversine(lat1, lon1, lat2, lon2):
+            R = 6371  # km
+            lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+            dlat = lat2 - lat1
+            dlon = lat2 - lon1
+            a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+            c = 2 * math.asin(math.sqrt(a))
+            return R * c
+
         try:
-            # Criar waypoints simples do ponto atual ao hub
+            G = self.rede_service.real_network_graph
+            if G is None:
+                print("⚠️ Grafo real não disponível.")
+                return None
+
+            # Encontrar nós mais próximos
+            origin_node = ox.distance.nearest_nodes(G, current_pos.longitude, current_pos.latitude)
+            dest_node = ox.distance.nearest_nodes(G, hub_base.longitude, hub_base.latitude)
+
+            # Calcular menor caminho baseado em tempo de viagem
+            path = nx.shortest_path(G, origin_node, dest_node, weight="travel_time")
+
             waypoints = []
-            
-            # Ponto de partida (posição atual)
-            waypoints.append(RouteWaypoint(
-                latitude=current_pos.latitude,
-                longitude=current_pos.longitude,
-                sequence=0,
-                estimated_time=0.0,
-                is_stop=True
-            ))
-            
-            # Alguns pontos intermediários para simular rota
-            lat_diff = hub_base.latitude - current_pos.latitude
-            lon_diff = hub_base.longitude - current_pos.longitude
-            
-            # Criar 2-3 waypoints intermediários
-            for i in range(1, 3):
-                fraction = i / 3.0
-                intermediate_lat = current_pos.latitude + (lat_diff * fraction)
-                intermediate_lon = current_pos.longitude + (lon_diff * fraction)
-                
+            total_distance = 0.0
+            total_time = 0.0
+
+            for i, node in enumerate(path):
+                data = G.nodes[node]
+                lat = data["y"]
+                lon = data["x"]
                 waypoints.append(RouteWaypoint(
-                    latitude=intermediate_lat,
-                    longitude=intermediate_lon,
+                    latitude=lat,
+                    longitude=lon,
                     sequence=i,
-                    estimated_time=i * 3.0,  # 3 minutos por waypoint
-                    is_stop=False
+                    estimated_time=0.0,  # será atualizado depois
+                    is_stop=(i == 0 or i == len(path) - 1)
                 ))
-            
-            # Ponto final (hub)
-            waypoints.append(RouteWaypoint(
-                latitude=hub_base.latitude,
-                longitude=hub_base.longitude,
-                sequence=3,
-                estimated_time=9.0,  # Tempo total estimado
-                is_stop=True
-            ))
-            
+                if i > 0:
+                    prev = G.nodes[path[i - 1]]
+                    dist = haversine(prev["y"], prev["x"], lat, lon)
+                    total_distance += dist
+
+            # Estimar tempo com base na distância total
+            average_speed_kmh = 30.0  # velocidade média urbana
+            estimated_duration = (total_distance / average_speed_kmh) * 60  # minutos
+
+            # Preencher tempos estimados nos waypoints
+            cumulative_time = 0.0
+            for i in range(len(waypoints)):
+                if i == 0:
+                    waypoints[i].estimated_time = 0.0
+                else:
+                    a = waypoints[i - 1]
+                    b = waypoints[i]
+                    seg_dist = haversine(a.latitude, a.longitude, b.latitude, b.longitude)
+                    time = (seg_dist / total_distance) * estimated_duration
+                    cumulative_time += time
+                    waypoints[i].estimated_time = cumulative_time
+
             return DetailedRoute(
                 route_id=route_id,
-                origin_id=f"client_{current_pos.latitude}_{current_pos.longitude}",
-                destination_id=f"hub_{hub_base.id}",
+                origin_id=f"coord_{current_pos.latitude}_{current_pos.longitude}",
+                destination_id=hub_base.id,
                 waypoints=waypoints,
-                total_distance=self._calculate_distance(
-                    current_pos.latitude, current_pos.longitude,
-                    hub_base.latitude, hub_base.longitude
-                ) * 111.0,  # Conversão aproximada para km
-                estimated_duration=random.uniform(8.0, 15.0),  # 8-15 minutos estimados
-                optimized=False
+                total_distance=total_distance,
+                estimated_duration=estimated_duration,
+                optimized=True
             )
-            
+
         except Exception as e:
-            print(f"❌ Erro ao criar rota de retorno: {e}")
+            print(f"❌ Erro ao criar rota de retorno usando grafo: {e}")
             return None
-    
-    def _calculate_heading_to_hub(self, current_pos, hub_base) -> float:
-        """Calcula a direção (heading) do ponto atual para o hub."""
-        try:
-            lat_diff = hub_base.latitude - current_pos.latitude
-            lon_diff = hub_base.longitude - current_pos.longitude
-            
-            # Calcular ângulo em radianos e converter para graus
-            angle_rad = math.atan2(lon_diff, lat_diff)
-            angle_deg = math.degrees(angle_rad)
-            
-            # Normalizar para 0-360
-            if angle_deg < 0:
-                angle_deg += 360
-                
-            return angle_deg
-        except:
-            return random.uniform(0, 360)
-    
-    async def _setup_direct_return(self, rede_id: str, vehicle_id: str, 
-                                  state: VehicleMovementState, hub_base):
-        """Configura retorno direto sem rota específica com movimento real."""
-        current_pos = self.rede_service.obter_posicao_veiculo(vehicle_id)
-        if current_pos:
-            # Configurar estado de retorno direto
-            state.status = "returning"
-            state.route_id = None
-            state.progress_percent = 0.0
-            state.current_client_id = None
-            state.movement_speed = random.uniform(15.0, 25.0)  # % por minuto
-            state.target_progress = 100.0
-            state.pause_until = None  # Remover pause - usar movimento contínuo
-            
-            # Armazenar coordenadas para interpolação
-            state.hub_target_lat = hub_base.latitude
-            state.hub_target_lon = hub_base.longitude
-            state.return_start_lat = current_pos.latitude
-            state.return_start_lon = current_pos.longitude
-            
-            # Atualizar status do veículo para "returning"
-            self.rede_service.atualizar_posicao_veiculo(
-                vehicle_id=vehicle_id,
-                latitude=current_pos.latitude,
-                longitude=current_pos.longitude,
-                speed=random.uniform(25, 40),
-                heading=self._calculate_heading_to_hub(current_pos, hub_base),
-                status="returning"
-            )
-            
-            print(f"🔄 Configurando retorno direto do veículo {vehicle_id} para hub em [{hub_base.latitude}, {hub_base.longitude}]")
+
     
     async def _vehicle_arrived_at_hub(self, rede_id: str, vehicle_id: str, 
                                      state: VehicleMovementState, current_time: datetime):
@@ -582,26 +607,43 @@ class VehicleMovementService:
                         vehicle_id=vehicle_id,
                         latitude=hub_base.latitude + random.uniform(-0.001, 0.001),
                         longitude=hub_base.longitude + random.uniform(-0.001, 0.001),
-                        speed=0.0,
+                        speed=0.0,  # Zera a velocidade
                         heading=random.uniform(0, 360),
-                        status="idle"
+                        status="refueling"  # Novo status para reabastecimento
                     )
-                    
                     # Limpar rota de retorno
                     if state.route_id and state.route_id in self.rede_service.detailed_routes:
                         del self.rede_service.detailed_routes[state.route_id]
-                    
                     # Configurar para reabastecimento
-                    state.status = "idle"
+                    state.status = "refueling"  # Atualiza status do backend
                     state.route_id = None
                     state.progress_percent = 0.0
-                    state.pause_until = current_time + timedelta(minutes=random.randint(2, 5))
-                    
-                    print(f"🏠 Veículo {vehicle_id} chegou ao hub e está reabastecendo")
-                    
+                    state.movement_speed = 0.0  # Garante velocidade zero
+                    # Tempo de reabastecimento entre 1.5 e 2 minutos
+                    state.pause_until = current_time + timedelta(minutes=random.uniform(1.5, 2.0))
+                    print(f"🏠 Veículo {vehicle_id} chegou ao hub e está pegando outra encomenda.")
+
+                    # NOVO: Verificar se todos os veículos estão idle e não há mais clientes
+                    if self._should_finish_simulation(rede_id):
+                        print("✅ Todos os clientes foram atendidos. Finalizando rastreamento de entregas.")
+                        self.stop_automatic_movement()
         except Exception as e:
             print(f"❌ Erro ao processar chegada no hub: {e}")
-    
+
+    def _should_finish_simulation(self, rede_id: str) -> bool:
+        """Retorna True se todos os veículos estão idle e não há mais clientes para atender."""
+        # Todos os veículos precisam estar idle
+        all_idle = all(state.status == "idle" for state in self.vehicle_states.values())
+        # Não pode haver clientes disponíveis
+        rede = self.rede_service.redes_cache.get(rede_id)
+        if not rede:
+            return False
+        atendidos = self.clientes_atendidos.get(rede_id, set())
+        em_atendimento = set(
+            state.current_client_id for state in self.vehicle_states.values() if state.current_client_id
+        )
+        clientes_disponiveis = [c for c in rede.clientes if c.id not in atendidos and c.id not in em_atendimento]
+        return all_idle and not clientes_disponiveis
     async def _direct_return_to_hub(self, rede_id: str, vehicle_id: str, 
                                    state: VehicleMovementState, current_time: datetime, time_delta: float):
         """Gerencia retorno direto ao hub com movimento real e contínuo."""
@@ -617,7 +659,7 @@ class VehicleMovementService:
                     # Calcular progresso incremental baseado na velocidade
                     progress_increment = state.movement_speed * (time_delta / 60.0)  # % por minuto
                     new_progress = min(100.0, state.progress_percent + progress_increment)
-                    
+
                     # Usar coordenadas armazenadas no estado ou calcular se não existirem
                     if state.return_start_lat is None or state.return_start_lon is None:
                         state.return_start_lat = current_pos.latitude
@@ -651,11 +693,7 @@ class VehicleMovementService:
                         
                         # Verificar se chegou ao hub
                         if new_progress >= 100.0:
-                            await self._vehicle_arrived_at_hub(rede_id, vehicle_id, state, current_time)
-                        else:
-                            # Debug: mostrar progresso do retorno ocasionalmente
-                            if random.random() < 0.1:  # 10% chance de mostrar log
-                                print(f"🔄 Veículo {vehicle_id} retornando: {new_progress:.1f}% concluído")
+                            await self._vehicle_arrived_at_hub(rede_id, vehicle_id, state,current_time)                      
                     else:
                         print(f"⚠️ Coordenadas inválidas para retorno do veículo {vehicle_id}")
                 else:
@@ -663,3 +701,37 @@ class VehicleMovementService:
                         
         except Exception as e:
             print(f"❌ Erro no retorno direto: {e}")
+            
+    def _calculate_heading_to_hub(self, current_pos, hub_base) -> float:
+        """Calcula a direção (heading) do ponto atual para o hub."""
+        try:
+            lat_diff = hub_base.latitude - current_pos.latitude
+            lon_diff = hub_base.longitude - current_pos.longitude
+
+            # Calcular ângulo em radianos e converter para graus
+            angle_rad = math.atan2(lon_diff, lat_diff)
+            angle_deg = math.degrees(angle_rad)
+
+            # Normalizar para 0-360
+            if angle_deg < 0:
+                angle_deg += 360
+
+            return angle_deg
+        except Exception as e:
+            print(f"⚠️ Erro ao calcular heading: {e}")
+            return random.uniform(0, 360)
+    
+    def _calculate_distance(self, lat1, lon1, lat2, lon2):
+        """Calcula a distância em km entre dois pontos geográficos usando a fórmula de Haversine."""
+        R = 6371  # Raio da Terra em km
+        lat1_rad, lon1_rad, lat2_rad, lon2_rad = map(math.radians, [lat1, lon1, lat2, lon2])
+        dlat = lat2_rad - lat1_rad
+        dlon = lat2_rad - lon1_rad
+        a = math.sin(dlat / 2) ** 2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2) ** 2
+        c = 2 * math.asin(math.sqrt(a))
+        return R * c
+
+    def get_movement_statistics(self, rede_id: str = None):
+        """Retorna estatísticas básicas de movimentação dos veículos. (Stub seguro)"""
+        # Você pode expandir para retornar estatísticas reais depois
+        return {}
