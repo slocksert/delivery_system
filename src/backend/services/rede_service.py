@@ -1081,6 +1081,7 @@ class RedeService:
 
         if not clientes_ids:
             print(f"✅ Todos os clientes da rede {rede_id} já foram atendidos.")
+            asyncio.create_task(broadcast_log(f"✅ Todos os clientes da rede {rede_id} já foram atendidos."))
             return []
    
         

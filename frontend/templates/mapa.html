@@ -111,6 +111,56 @@
             z-index: 1000;
         }
 
+        .log-box {
+            position: fixed;
+            top: 100px;
+            left: 20px;
+            width: 460px;
+            height: 750px;
+            overflow: auto;
+            background: rgba(255, 255, 255, 0.95);
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            color: #333;
+            /* Verde neon para texto */
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            padding: 15px;
+            border-radius: 8px;
+            z-index: 2000;
+            line-height: 1.5;
+        }
+
+        /* Barra de rolagem estilo terminal */
+        .log-box::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .log-box::-webkit-scrollbar-thumb {
+            background: #333;
+            border-radius: 4px;
+        }
+
+        .log-box::-webkit-scrollbar-track {
+            background: #1a1a1a;
+        }
+
+        .log-entry {
+            animation: typing 0.3s steps(40, end);
+            margin-bottom: 10px;
+            border-bottom: 1px dotted rgba(0, 0, 0, 0.1);
+            padding-bottom: 5px;
+        }
+
+        @keyframes typing {
+            from {
+                width: 0
+            }
+
+            to {
+                width: 100%
+            }
+        }
+
         .controls button {
             background: #2563eb;
             color: white;
@@ -468,6 +518,11 @@
         <button onclick="stopTracking()" id="stopBtn" disabled>Parar</button>
     </div>
 
+     <div id="logBox" class="log-box">
+        <b>Logs do sistema</b>
+        <div id="logContent"></div>
+    </div>
+
     <!-- Modal para configuração da rede -->
     <div id="networkModal" class="modal">
         <div class="modal-content">
@@ -605,6 +660,15 @@
             }
         }
 
+        function appendLogToBox(message, timestamp) {
+            const logContent = document.getElementById('logContent');
+            const time = timestamp ? new Date(timestamp).toLocaleTimeString('pt-BR') : '';
+            const line = document.createElement('div');
+            line.textContent = `[${time}] ${message}`;
+            logContent.appendChild(line);
+            logContent.parentElement.scrollTop = logContent.parentElement.scrollHeight;
+        }
+
         // Atualizar status de conexão
         function updateConnectionStatus(connected) {
             const dot = document.getElementById('connectionDot');
@@ -629,6 +693,9 @@
                 loadNetworkData(data.rede_id);
             } else if (data.type === 'error') {
                 console.error('❌ Erro do WebSocket:', data.message);
+            } else if (data.type === 'log') {
+                appendLogToBox(data.message, data.timestamp);
+                return;
             }
         }
 
@@ -726,7 +793,7 @@
                             iconSize: [15, 15],
                             iconAnchor: [7, 7]
                         });
-                       
+
                         const demanda = Number(node.demand);
                         const marker = L.marker(node.coordinates, { icon }).addTo(map);
                         marker.bindPopup(`
@@ -909,7 +976,7 @@
 
                 hubs.set(hub.id, marker);
             });
- 
+
             const clientesAmostra = rede.clientes || [];
             clientesAmostra.forEach(cliente => {
                 const icon = L.divIcon({
@@ -1455,6 +1522,7 @@
             stopTracking();
         });
     </script>
+
 </body>
 
 </html>

@@ -73,6 +73,11 @@ class VehicleMovementService:
         """Para a movimentação automática."""
         self.is_running = False
         print("⏹️ Rastreamento interrompido")
+        try:
+            from src.backend.api.websocket import broadcast_log
+        except ImportError:
+            from ..api.websocket import broadcast_log
+        asyncio.create_task(broadcast_log("⏹️ Rastreamento interrompido"))
     
     async def _initialize_vehicle_states(self, rede_id: str):
         """Inicializa estados de movimento dos veículos: cada veículo pega o cliente mais próximo disponível (matching guloso sequencial)."""
@@ -208,7 +213,13 @@ class VehicleMovementService:
                         target_progress=100.0,
                         current_client_id=client_ids[0]
                     )
-                    print(f"🛣️ Veículo {vehicle.id}: {first_route.route_id} -> Cliente {client_ids[0]} (demanda restante: {demanda_restante[client_ids[0]]})")
+                    print(f"🛣️ Veículo {vehicle.id}: {first_route.route_id} -> Cliente {client_ids[0]}")
+                    try:
+                        from src.backend.api.websocket import broadcast_log
+                    except ImportError:
+                        from ..api.websocket import broadcast_log
+                    await broadcast_log(f"🛣️ Veículo {vehicle.id}: {first_route.route_id} -> Cliente {client_ids[0]}")
+
                 else:
                     self.vehicle_states[vehicle.id] = VehicleMovementState(
                         vehicle_id=vehicle.id,
@@ -381,6 +392,12 @@ class VehicleMovementService:
                         )
 
                         print(f"📦 Veículo {vehicle_id} chegou ao destino e está entregando (tempo estimado: {delivery_time} min)")
+                        try:
+                            from src.backend.api.websocket import broadcast_log
+                        except ImportError:
+                            from ..api.websocket import broadcast_log
+                        await broadcast_log(f"📦 Veículo {vehicle_id} chegou ao destino e está entregando (tempo estimado: {delivery_time} min)")
+
                         # Só adiciona cliente válido
                         if state.current_client_id is not None:
                             self.clientes_atendidos.setdefault(rede_id, set()).add(state.current_client_id)
@@ -388,6 +405,11 @@ class VehicleMovementService:
                             if hasattr(self, 'clientes_em_atendimento'):
                                 self.clientes_em_atendimento.discard(state.current_client_id)
                             print(f"✅  O cliente {state.current_client_id} foi atendido.")
+                            try:
+                                from src.backend.api.websocket import broadcast_log
+                            except ImportError:
+                                from ..api.websocket import broadcast_log
+                            await broadcast_log(f"✅  O cliente {state.current_client_id} foi atendido.")
                         else:
                             print(f"⚠️ Atenção: Veículo {vehicle_id} chegou ao destino mas current_client_id é None. Nenhum cliente será marcado como atendido.")
 
@@ -416,6 +438,8 @@ class VehicleMovementService:
                     )
 
                     print(f"🔄 O veículo {vehicle_id} está retornando ao HUB.")
+
+                    await broadcast_log(f"🔄 O veículo {vehicle_id} está retornando ao HUB.")
         
             elif state.status == "returning":
                 # Veículo retornando - movimentar em direção ao hub
@@ -623,9 +647,13 @@ class VehicleMovementService:
                     state.pause_until = current_time + timedelta(minutes=random.uniform(1.5, 2.0))
                     print(f"🏠 Veículo {vehicle_id} chegou ao hub e está pegando outra encomenda.")
 
+                    await broadcast_log(f"🏠 Veículo {vehicle_id} chegou ao hub e está pegando outra encomenda.")
+
                     # NOVO: Verificar se todos os veículos estão idle e não há mais clientes
                     if self._should_finish_simulation(rede_id):
                         print("✅ Todos os clientes foram atendidos. Finalizando rastreamento de entregas.")
+
+                        await broadcast_log("✅ Todos os clientes foram atendidos. Finalizando rastreamento de entregas.")
                         self.stop_automatic_movement()
         except Exception as e:
             print(f"❌ Erro ao processar chegada no hub: {e}")

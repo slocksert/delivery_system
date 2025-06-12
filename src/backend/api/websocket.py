@@ -633,3 +633,12 @@ async def run_vehicle_simulation(rede_id: str, rede_service: RedeService):
         
     except Exception as e:
         print(f"❌ Erro na simulação de veículos: {e}")
+
+async def broadcast_log(message: str):
+    # Envia log para todas as redes conectadas
+    for rede_id in manager.active_connections.keys():
+        await manager.broadcast_to_network(rede_id, {
+            "type": "log",
+            "timestamp": get_brazilian_timestamp().isoformat(),
+            "message": message
+        })

@@ -2,7 +2,7 @@
 Gerador expandido de rede de entregas para Maceió usando dados reais do OpenStreetMap
 Inclui clientes finais e rotas completas baseadas na infraestrutura real da cidade
 """
-
+import asyncio
 import json
 import math
 import random
@@ -16,6 +16,10 @@ from ..entities.models import (
     Deposito, Hub, Cliente, ZonaEntrega, Veiculo, Rota, RedeEntrega,
     TipoVeiculo, PrioridadeCliente
 )
+
+# Remover o import absoluto que causa erro
+# from src.backend.api.websocket import broadcast_log
+async def broadcast_log(*a, **kw): return None
 
 # Função utilitária para timestamps brasileiros
 def get_brazilian_timestamp() -> datetime:
@@ -204,6 +208,8 @@ class GeradorMaceioCompleto:
             )
             depositos.append(deposito)
             print(f"📦 Depósito estratégico criado: {config['nome']} ({lat:.4f}, {lon:.4f})")
+
+            asyncio.create_task(broadcast_log(f"📦 Depósito estratégico criado: {config['nome']} ({lat:.4f}, {lon:.4f})"))
         
         return depositos
     
@@ -252,6 +258,7 @@ class GeradorMaceioCompleto:
             )
             hubs.append(hub)
             print(f"🏪 Hub estratégico criado: {config['nome']} ({lat:.4f}, {lon:.4f})")
+            asyncio.create_task(broadcast_log(f"🏪 Hub estratégico criado: {config['nome']} ({lat:.4f}, {lon:.4f})"))
             hub_id += 1
         
         return hubs
