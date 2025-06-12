@@ -739,10 +739,16 @@ class GeradorMaceioCompleto:
             PrioridadeCliente.BAIXA: 0.8,
             PrioridadeCliente.NORMAL: 1.0,
             PrioridadeCliente.ALTA: 1.3,
-            PrioridadeCliente.URGENTE: 1.8,
-            PrioridadeCliente.CRITICA: 2.5
+            PrioridadeCliente.URGENTE: 1.8
         }
-        return custo_base * (1 + fator_distancia) * multiplicador_prioridade[prioridade]
+        
+        try:
+            multiplicador = multiplicador_prioridade[prioridade]
+        except KeyError:
+            # Se a prioridade não estiver definida no dicionário, usar valor NORMAL como padrão
+            multiplicador = multiplicador_prioridade[PrioridadeCliente.NORMAL]
+            
+        return custo_base * (1 + fator_distancia) * multiplicador
 
     def _gerar_distribuicao_estrategica(self, num_pontos: int, tipo_ponto: str = "hub") -> List[Tuple[float, float, str]]:
         """

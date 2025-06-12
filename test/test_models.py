@@ -104,9 +104,10 @@ class TestEnums:
         assert TipoVeiculo.VAN.value == "van"
     
     def test_prioridade_cliente(self):
-        assert PrioridadeCliente.URGENTE.value == 4
-        assert PrioridadeCliente.CRITICA.value == 5
-        assert PrioridadeCliente.NORMAL.value == 2
+        assert PrioridadeCliente.URGENTE.value == 1
+        assert PrioridadeCliente.ALTA.value == 2
+        assert PrioridadeCliente.NORMAL.value == 3
+        assert PrioridadeCliente.BAIXA.value == 4
     
     def test_status_pedido(self):
         assert StatusPedido.PENDENTE.value == "pendente"
