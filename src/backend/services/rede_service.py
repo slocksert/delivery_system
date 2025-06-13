@@ -84,6 +84,7 @@ class RedeService:
         self.vehicle_positions: Dict[str, VehiclePosition] = {}
         self.detailed_routes: Dict[str, DetailedRoute] = {}
         self.real_network_graph = None
+        self._real_network_loaded = False  # Flag para controlar se a rede real foi carregada
         
         # Inicializar serviço de movimento de veículos
         try:
@@ -94,25 +95,34 @@ class RedeService:
             self.movement_service = None
         
         self._carregar_redes_do_banco()
-        self._inicializar_rede_real()
+        # Remover inicialização automática da rede real
+        # self._inicializar_rede_real()
 
     def _inicializar_rede_real(self):
         """Inicializa o grafo real de Maceió para cálculos de rota"""
-        if OSMNX_AVAILABLE and ox is not None:
-            try:
-                print("Carregando rede real de Maceió para suporte a WebSocket...")
-                lugar = "Maceió, Alagoas, Brazil"
-                self.real_network_graph = ox.graph_from_place(
-                    lugar, 
-                    network_type='drive',
-                    simplify=True
-                )
-                self.real_network_graph = ox.add_edge_speeds(self.real_network_graph)
-                self.real_network_graph = ox.add_edge_travel_times(self.real_network_graph)
-                print(f"Rede real carregada: {len(self.real_network_graph.nodes)} nós, {len(self.real_network_graph.edges)} arestas")
-            except Exception as e:
-                print(f"Erro ao carregar rede real: {e}")
-                self.real_network_graph = None
+        if self._real_network_loaded or not OSMNX_AVAILABLE or ox is None:
+            return
+            
+        try:
+            print("Carregando rede real de Maceió para suporte a WebSocket...")
+            lugar = "Maceió, Alagoas, Brazil"
+            self.real_network_graph = ox.graph_from_place(
+                lugar, 
+                network_type='drive',
+                simplify=True
+            )
+            self.real_network_graph = ox.add_edge_speeds(self.real_network_graph)
+            self.real_network_graph = ox.add_edge_travel_times(self.real_network_graph)
+            print(f"Rede real carregada: {len(self.real_network_graph.nodes)} nós, {len(self.real_network_graph.edges)} arestas")
+            self._real_network_loaded = True
+        except Exception as e:
+            print(f"Erro ao carregar rede real: {e}")
+            self.real_network_graph = None
+    
+    def _garantir_rede_real_carregada(self):
+        """Garante que a rede real esteja carregada apenas quando necessário"""
+        if not self._real_network_loaded:
+            self._inicializar_rede_real()
 
     def _carregar_redes_do_banco(self):
         redes_list = self.db.listar_redes()
@@ -369,8 +379,8 @@ class RedeService:
         rede = self.redes_cache[rede_id]
         metadata = self.metadata_cache.get(rede_id, {})
         
-        # Inicializar posições de veículos se não existirem
-        self._inicializar_posicoes_veiculos(rede_id, rede)
+        # NÃO inicializar posições automaticamente - apenas quando solicitado
+        # self._inicializar_posicoes_veiculos(rede_id, rede)
         
         todos_nos = []
         
@@ -926,10 +936,13 @@ class RedeService:
         positions = [p for p in positions if is_active_or_waiting(p)]
         return positions
     
-    def calcular_rota_detalhada(self, origin_lat: float, origin_lon: float, 
+    def calcular_rota_detalhada(self, origin_lat: float, origin_lon: float,
                               dest_lat: float, dest_lon: float, 
                               route_id: Optional[str] = None) -> Optional[DetailedRoute]:
         """Calcula uma rota detalhada com waypoints usando a rede real"""
+        # Carregar rede real apenas quando necessário
+        self._garantir_rede_real_carregada()
+        
         if not OSMNX_AVAILABLE or self.real_network_graph is None or ox is None:
             return self._calcular_rota_sintetica(origin_lat, origin_lon, dest_lat, dest_lon, route_id)
         
@@ -1467,7 +1480,7 @@ class RedeService:
                     })
         
         # Calcular densidade de tráfego baseada no número de veículos ativos
-        if self.real_network_graph:
+        if self._real_network_loaded and self.real_network_graph:
             network_area = len(self.real_network_graph.nodes) / 1000  # Normalizar
             stats["traffic_density"] = len(self.vehicle_positions) / network_area
         
@@ -1681,5 +1694,12 @@ class RedeService:
                 )
         print(f"✅ Inicializadas {len(rede.veiculos)} posições de veículos para rede {rede_id}")
         # NÃO criar rotas ativas nem iniciar movimento automático aqui!
-    
-    
+
+    def inicializar_posicoes_se_necessario(self, rede_id: str):
+        """Inicializa posições de veículos apenas se solicitado explicitamente"""
+        if rede_id not in self.redes_cache:
+            raise ValueError("Rede não encontrada")
+        
+        rede = self.redes_cache[rede_id]
+        self._inicializar_posicoes_veiculos(rede_id, rede)
+
