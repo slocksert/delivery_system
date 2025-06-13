@@ -8,8 +8,10 @@ import websockets
 import json
 import time
 import sys
+import pytest
 from concurrent.futures import ThreadPoolExecutor
 
+@pytest.mark.asyncio 
 async def test_websocket_connection(network_id="test_network", duration=10):
     """Test WebSocket connection with simulated disconnection"""
     uri = f"ws://localhost:8000/tracking/{network_id}?token=test_token"
@@ -40,6 +42,7 @@ async def test_websocket_connection(network_id="test_network", duration=10):
     except Exception as e:
         print(f"❌ Erro na conexão WebSocket: {e}")
 
+@pytest.mark.asyncio
 async def test_multiple_connections():
     """Test multiple connections to simulate production load"""
     print("🚀 Testando múltiplas conexões WebSocket...")
@@ -57,6 +60,7 @@ async def test_multiple_connections():
     
     print("✓ Teste de múltiplas conexões concluído")
 
+@pytest.mark.asyncio
 async def test_abrupt_disconnection():
     """Test abrupt disconnection to verify error handling"""
     uri = "ws://localhost:8000/tracking/test_abrupt?token=test_token"

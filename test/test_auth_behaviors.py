@@ -22,11 +22,11 @@ from typing import Dict, Any
 from fastapi.testclient import TestClient
 
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from backend.main import app
-from backend.database.sqlite import SQLiteDB
-from backend.dependencies import get_database, override_database_for_testing, reset_database
+from src.backend.main import app
+from src.backend.database.sqlite import SQLiteDB
+from src.backend.dependencies import get_database, override_database_for_testing, reset_database
 
 
 @pytest.fixture(scope="function") 

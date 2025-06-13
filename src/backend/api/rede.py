@@ -267,7 +267,7 @@ async def preparar_calculo_fluxo(
 
 @router.get(
     "/{rede_id}/nos",
-    response_model=List[Dict[str, str]],
+    response_model=List[Dict[str, Any]],
     summary="Listar nós da rede",
     description="Lista todos os nós (depósitos, hubs, zonas) de uma rede"
 )
@@ -276,7 +276,7 @@ async def listar_nos_rede(
     tipo: str,  # Query parameter opcional para filtrar por tipo
     rede_service: RedeService = Depends(get_rede_service),
     current_user: User = Depends(require_read_permission)
-) -> List[Dict[str, str]]:
+) -> List[Dict[str, Any]]:
     try:
         info = rede_service.obter_info_rede(rede_id)
         nodes = info.get('nodes', [])

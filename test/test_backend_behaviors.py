@@ -25,12 +25,12 @@ import time
 import json
 from typing import Dict, Any, List, Optional
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from backend.main import app
-from backend.dependencies import get_rede_service, get_database, override_database_for_testing, reset_database
-from backend.services.rede_service import RedeService
-from backend.database.sqlite import SQLiteDB
+from src.backend.main import app
+from src.backend.dependencies import get_rede_service, get_database, override_database_for_testing, reset_database
+from src.backend.services.rede_service import RedeService
+from src.backend.database.sqlite import SQLiteDB
 
 
 @pytest.fixture(scope="function")
@@ -154,10 +154,11 @@ class TestAPIHealthAndStatus:
     """Testa saúde, status e funcionalidade básica da API."""
     
     def test_api_root_endpoint_provides_version_information(self, isolated_client_with_auth):
-        """Endpoint raiz da API deve fornecer informações de versão do serviço."""
-        response = isolated_client_with_auth.get("/")
+        """Endpoint da API deve fornecer informações de versão do serviço."""
+        # O endpoint raiz redireciona, então vamos testar o endpoint /api
+        response = isolated_client_with_auth.get("/api")
         
-        assert response.status_code == 200, "Endpoint raiz deve ser acessível"
+        assert response.status_code == 200, "Endpoint da API deve ser acessível"
         data = response.json()
         assert "message" in data, "Deve incluir mensagem do serviço"
         assert "version" in data, "Deve incluir informações de versão"

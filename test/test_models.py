@@ -6,8 +6,12 @@ Verifica entidades, funcionalidades da rede, gerador de dados e validações.
 import pytest
 import json
 import os
+import sys
 import tempfile
 from datetime import datetime
+
+# Add the parent directory to the path to import from src
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from src.core.entities.models import (
     Deposito, Hub, Cliente, ZonaEntrega, Veiculo, Pedido, Rota, RedeEntrega,
@@ -250,7 +254,8 @@ class TestMetodosEspecificos:
 class TestGerador:
     """Testa gerador de dados"""
     
-    def test_gerar_rede_pequena(self):
+    @pytest.mark.asyncio
+    async def test_gerar_rede_pequena(self):
         gerador = GeradorMaceioCompleto(seed=42)
         rede = gerador.gerar_rede_completa(num_clientes=10)
         
@@ -263,7 +268,8 @@ class TestGerador:
         assert stats['total_clientes'] == 10
         assert stats['taxa_utilizacao'] >= 0
     
-    def test_integridade_rede_gerada(self):
+    @pytest.mark.asyncio
+    async def test_integridade_rede_gerada(self):
         gerador = GeradorMaceioCompleto(seed=123)
         rede = gerador.gerar_rede_completa(num_clientes=15)
         
