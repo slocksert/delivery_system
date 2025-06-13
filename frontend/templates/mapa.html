@@ -484,6 +484,132 @@
             color: #6b7280;
             margin-top: 8px;
         }
+
+        /* Responsividade para dispositivos móveis */
+        @media (max-width: 768px) {
+            /* Painel de informações */
+            .info-panel {
+                top: 5px;
+                right: 5px;
+                left: 5px;
+                min-width: auto;
+                width: calc(100% - 10px);
+                padding: 10px;
+                font-size: 12px;
+                max-height: 120px;
+                overflow-y: auto;
+            }
+
+            .info-panel h3 {
+                font-size: 14px;
+                margin-bottom: 8px;
+            }
+
+            /* Controles */
+            .controls {
+                bottom: 10px;
+                left: 5px;
+                right: 5px;
+                padding: 10px;
+                display: flex;
+                flex-wrap: wrap;
+                gap: 5px;
+                justify-content: center;
+            }
+
+            .controls button {
+                padding: 6px 12px;
+                font-size: 12px;
+                flex: 1;
+                min-width: 70px;
+            }
+
+            /* Status de conexão */
+            .connection-status {
+                top: 130px;
+                left: 5px;
+                font-size: 10px;
+                padding: 6px 10px;
+            }
+
+            /* Log box */
+            .log-box {
+                top: 160px;
+                left: 5px;
+                right: 5px;
+                width: calc(100% - 10px);
+                height: 200px;
+                font-size: 12px;
+                padding: 10px;
+            }
+
+            /* Modal responsivo */
+            .modal-content {
+                width: 95%;
+                margin: 20px auto;
+                max-height: 90vh;
+                overflow-y: auto;
+                min-width: auto;
+            }
+
+            /* Formulários no modal */
+            .form-group {
+                margin-bottom: 10px;
+            }
+
+            .form-group label {
+                font-size: 12px;
+            }
+
+            .form-group input,
+            .form-group select {
+                font-size: 14px;
+                padding: 8px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            /* Para telas muito pequenas */
+            .info-panel {
+                max-height: 100px;
+                font-size: 11px;
+            }
+
+            .controls {
+                flex-direction: column;
+            }
+
+            .controls button {
+                width: 100%;
+                margin: 2px 0;
+            }
+
+            .log-box {
+                height: 150px;
+                font-size: 10px;
+            }
+
+            .connection-status {
+                font-size: 9px;
+            }
+        }
+
+        /* Orientação landscape no mobile */
+        @media (max-width: 768px) and (orientation: landscape) {
+            .info-panel {
+                max-height: 80px;
+                font-size: 10px;
+            }
+
+            .log-box {
+                height: 120px;
+                top: 90px;
+            }
+
+            .connection-status {
+                top: 85px;
+            }
+        }
     </style>
 </head>
 
@@ -723,6 +849,73 @@
         let currentNetworkId = null;
         let accessToken = null;
 
+        function log(message, level = 'info') {
+            const timestamp = new Date();
+            const timeStr = timestamp.toLocaleTimeString('pt-BR');
+            
+            console.log(`[${timeStr}] ${message}`);
+            
+            try {
+                appendLogToBox(message, timestamp);
+            } catch (e) {
+                console.warn('Log-box não disponível:', e);
+            }
+        }
+
+        const originalConsoleLog = console.log;
+        console.log = function(...args) {
+            originalConsoleLog.apply(console, args);
+            
+            // Para logs importantes, também mostrar no log-box
+            let message = '';
+            for (let i = 0; i < args.length; i++) {
+                if (typeof args[i] === 'object') {
+                    try {
+                        // Para objetos pequenos, mostrar de forma resumida
+                        const obj = args[i];
+                        if (obj && typeof obj === 'object') {
+                            const keys = Object.keys(obj);
+                            if (keys.length <= 3) {
+                                message += JSON.stringify(obj);
+                            } else {
+                                message += `{${keys.length} propriedades}`;
+                            }
+                        }
+                    } catch (e) {
+                        message += '[objeto complexo]';
+                    }
+                } else {
+                    message += String(args[i]);
+                }
+                if (i < args.length - 1) message += ' ';
+            }
+            
+            if (message.includes('✓') || message.includes('❌') || message.includes('🔌') || 
+                message.includes('📊') || message.includes('🚗') || message.includes('✗')) {
+                try {
+                    appendLogToBox(message, new Date());
+                } catch (e) {
+                }
+            }
+        };
+
+        function appendLogToBox(message, timestamp) {
+            const logContent = document.getElementById('logContent');
+            if (!logContent) return;
+            
+            const time = timestamp ? new Date(timestamp).toLocaleTimeString('pt-BR') : '';
+            const line = document.createElement('div');
+            line.className = 'log-entry';
+            line.textContent = `[${time}] ${message}`;
+            logContent.appendChild(line);
+            logContent.parentElement.scrollTop = logContent.parentElement.scrollHeight;
+            
+            // Limitar número de logs para performance
+            if (logContent.children.length > 100) {
+                logContent.removeChild(logContent.firstChild);
+            }
+        }
+
         // Inicializar mapa centrado em Maceió
         function initMap() {
             map = L.map('map').setView([-9.6658, -35.7350], 12);
@@ -731,21 +924,21 @@
                 attribution: '© OpenStreetMap contributors'
             }).addTo(map);
 
-            console.log('✓ Mapa inicializado');
+            log('✓ Mapa inicializado');
         }
 
         // Conectar WebSocket
         function connectWebSocket(redeId) {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const token = localStorage.getItem('accessToken');
-            console.log('🔌 Conectando WebSocket com token:', token ? token.substring(0, 20) + '...' : 'null');
+            log('🔌 Conectando WebSocket com token: ' + (token ? token.substring(0, 20) + '...' : 'null'));
             const wsUrl = `${protocol}//${window.location.host}/tracking/${redeId}?token=${token}`;
 
             try {
                 websocket = new WebSocket(wsUrl);
 
                 websocket.onopen = function (event) {
-                    console.log('✓ WebSocket conectado');
+                    log('✓ WebSocket conectado');
                     updateConnectionStatus(true);
                 };
 
@@ -755,7 +948,7 @@
                 };
 
                 websocket.onclose = function (event) {
-                    console.log('✗ WebSocket desconectado');
+                    log('✗ WebSocket desconectado');
                     updateConnectionStatus(false);
 
                     // Tentar reconectar após 5 segundos
@@ -765,23 +958,14 @@
                 };
 
                 websocket.onerror = function (error) {
-                    console.error('❌ Erro WebSocket:', error);
+                    log('❌ Erro WebSocket: ' + error.toString());
                     updateConnectionStatus(false);
                 };
 
             } catch (error) {
-                console.error('❌ Erro ao conectar WebSocket:', error);
+                log('❌ Erro ao conectar WebSocket: ' + error.toString());
                 updateConnectionStatus(false);
             }
-        }
-
-        function appendLogToBox(message, timestamp) {
-            const logContent = document.getElementById('logContent');
-            const time = timestamp ? new Date(timestamp).toLocaleTimeString('pt-BR') : '';
-            const line = document.createElement('div');
-            line.textContent = `[${time}] ${message}`;
-            logContent.appendChild(line);
-            logContent.parentElement.scrollTop = logContent.parentElement.scrollHeight;
         }
 
         // Atualizar status de conexão
@@ -792,12 +976,12 @@
 
         // Processar mensagens do WebSocket
         function handleWebSocketMessage(data) {
-            console.log('📨 Dados recebidos:', data);
+            console.log('📨 Dados recebidos via WebSocket');
 
             if (data.type === 'network_update') {
                 updateNetworkDisplay(data);
             } else if (data.type === 'initial_data') {
-                console.log('📊 Dados iniciais recebidos:', data.data);
+                console.log('📊 Dados iniciais recebidos da rede');
                 if (data.data) {
                     updateNetworkDisplay(data.data);
                 }
@@ -816,7 +1000,7 @@
 
         // Atualizar display da rede
         function updateNetworkDisplay(data) {
-            console.log('🔄 Atualizando display da rede:', data);
+            console.log('🔄 Atualizando display da rede');
 
             // Verificar se temos dados de rede inicial (formato exportar_dados_websocket)
             if (data.network_info && data.network_info.nodes) {
@@ -826,16 +1010,17 @@
 
             // Atualizar estatísticas
             if (data.estatisticas) {
-                console.log('📊 Estatísticas:', data.estatisticas);
+                // Log mais informativo das estatísticas
+                const stats = data.estatisticas;
+                const vehiculosAtivos = stats.veiculos?.ativos || stats.veiculos_ativos || 0;
+                const rotasAtivas = stats.rotas?.ativas || stats.rotas_ativas || 0;
+                
+                console.log(`📊 Estatísticas: ${vehiculosAtivos} veículos ativos, ${rotasAtivas} rotas ativas`);
 
                 // Atualizar veículos ativos (usar dados corretos)
-                const vehiculosAtivos = data.estatisticas.veiculos?.ativos ||
-                    data.estatisticas.veiculos_ativos || 0;
                 document.getElementById('activeVehicles').textContent = vehiculosAtivos;
 
                 // Atualizar rotas ativas
-                const rotasAtivas = data.estatisticas.rotas?.ativas ||
-                    data.estatisticas.rotas_ativas || 0;
                 document.getElementById('totalRoutes').textContent = rotasAtivas;
             }
 
@@ -859,7 +1044,7 @@
                 updateVehiclePositions(vehiclePositions);
             } else {
                 console.log('⚠️ Nenhuma posição de veículo recebida');
-                console.log('📊 Dados completos recebidos:', data);
+                console.log('📊 Verificando dados completos recebidos...');
             }
         }
 
@@ -1603,6 +1788,7 @@
 
         // Inicializar aplicação
         document.addEventListener('DOMContentLoaded', async function () {
+            log('🚀 Sistema iniciando...');
             initMap();
 
             // Fazer login primeiro
